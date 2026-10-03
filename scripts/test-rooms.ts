@@ -63,15 +63,9 @@ await step("phone A joins as player 1 and host is notified", async () => {
   assert.deepEqual((await joined)[0], { slot: 1, reconnected: false });
 });
 
-await step("phone B joins as player 2 (code is case-insensitive)", async () => {
+await step("second phone is rejected with ROOM_FULL (code is case-insensitive)", async () => {
   const res = await phoneB.emitWithAck("controller:join", { code: code.toLowerCase() });
-  assert.ok(res.ok);
-  assert.equal(res.slot, 2);
-});
-
-await step("third phone is rejected with ROOM_FULL", async () => {
-  const c = await client();
-  assert.deepEqual(await c.emitWithAck("controller:join", { code }), { ok: false, error: "ROOM_FULL" });
+  assert.deepEqual(res, { ok: false, error: "ROOM_FULL" });
 });
 
 await step("unknown code is rejected with ROOM_NOT_FOUND", async () => {
@@ -87,16 +81,17 @@ await step("swing from phone A is relayed to host tagged as slot 1", async () =>
   assert.deepEqual((await got)[0], { slot: 1, input: swing });
 });
 
-await step("host message reaches only the targeted phone", async () => {
-  let aGot = false;
-  phoneA.once("host:message", () => (aGot = true));
-  const got = next(phoneB, "host:message");
-  host.emit("host:send", { slot: 2, msg: { type: "vibrate", ms: 40 } });
+await step("host message reaches the player's phone only", async () => {
+  let bGot = false;
+  phoneB.once("host:message", () => (bGot = true));
+  const got = next(phoneA, "host:message");
+  host.emit("host:send", { slot: 1, msg: { type: "vibrate", ms: 40 } });
   assert.deepEqual((await got)[0], { type: "vibrate", ms: 40 });
   await new Promise((r) => setTimeout(r, 50));
-  assert.equal(aGot, false);
+  assert.equal(bGot, false);
 });
 
+let phoneA2: Client;
 await step("phone A drops; slot is held and reclaimed with its token", async () => {
   const left = next(host, "player:left");
   phoneA.disconnect();
@@ -105,7 +100,7 @@ await step("phone A drops; slot is held and reclaimed with its token", async () 
   const stranger = await client();
   assert.deepEqual(await stranger.emitWithAck("controller:join", { code }), { ok: false, error: "ROOM_FULL" });
 
-  const phoneA2 = await client();
+  phoneA2 = await client();
   const joined = next(host, "player:joined");
   const res = await phoneA2.emitWithAck("controller:join", { code, playerToken: tokenA });
   assert.ok(res.ok);
@@ -113,18 +108,18 @@ await step("phone A drops; slot is held and reclaimed with its token", async () 
   assert.deepEqual((await joined)[0], { slot: 1, reconnected: true });
 });
 
-await step("host drops and rejoins; phones see status changes", async () => {
-  const down = next(phoneB, "host:status");
+await step("host drops and rejoins; phone sees status changes", async () => {
+  const down = next(phoneA2, "host:status");
   host.disconnect();
   assert.deepEqual((await down)[0], { connected: false });
 
   const host2 = await client();
-  const up = next(phoneB, "host:status");
+  const up = next(phoneA2, "host:status");
   const bad = await host2.emitWithAck("host:rejoin", { code, hostToken: "nope" });
   assert.deepEqual(bad, { ok: false, error: "BAD_TOKEN" });
   const res = await host2.emitWithAck("host:rejoin", { code, hostToken });
   assert.ok(res.ok);
-  assert.deepEqual(res.players.sort(), [1, 2]);
+  assert.deepEqual(res.players, [1]);
   assert.deepEqual((await up)[0], { connected: true });
 });
 

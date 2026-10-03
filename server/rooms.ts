@@ -108,10 +108,10 @@ export class RoomManager {
       const { role, code, slot } = socket.data;
       if (role !== "controller" || !code || !slot) return;
       const room = this.rooms.get(code);
-      if (room?.hostSocketId) {
-        // volatile: drop stale tilt frames rather than queue them.
-        this.io.to(room.hostSocketId).volatile.emit("player:input", { slot, input });
-      }
+      if (!room?.hostSocketId) return;
+      const host = this.io.to(room.hostSocketId);
+      // Tilt is a stream: drop stale frames rather than queue them. Everything else must arrive.
+      (input.type === "tilt" ? host.volatile : host).emit("player:input", { slot, input });
     });
 
     socket.on("disconnect", () => this.leaveCurrent(socket));

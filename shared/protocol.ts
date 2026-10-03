@@ -1,11 +1,14 @@
 // Socket event contract shared by server, game screen, and phone controller.
 
 export type PlayerSlot = 1 | 2;
-export const MAX_PLAYERS = 2;
+/** 1 = single player vs computer. Set to 2 to enable two-player mode. */
+export const MAX_PLAYERS = 1;
 
 /** Messages a phone sends that the server relays verbatim to the game screen. */
 export type ControllerInput =
-  | { type: "tilt"; beta: number; gamma: number; t: number }
+  | { type: "bounce" } // drop a ball next to the player to start a rally
+  /** Full phone orientation (DeviceOrientationEvent angles, degrees). */
+  | { type: "tilt"; alpha: number; beta: number; gamma: number; t: number }
   | {
       type: "swing";
       power: number; // 0..1, normalized peak acceleration
@@ -17,7 +20,9 @@ export type ControllerInput =
 /** Messages the game screen sends to a specific phone. */
 export type HostMessage =
   | { type: "vibrate"; ms: number }
-  | { type: "state"; state: "lobby" | "calibrate" | "playing" | "paused" };
+  | { type: "state"; state: "lobby" | "calibrate" | "playing" | "paused" }
+  /** Whether the phone's "Bounce ball" button should be enabled. */
+  | { type: "serve"; ready: boolean };
 
 export type JoinError = "ROOM_NOT_FOUND" | "ROOM_FULL";
 

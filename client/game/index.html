@@ -5,31 +5,62 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" href="data:," />
     <title>AirSports Tennis</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&family=Barlow+Semi+Condensed:ital,wght@0,600;1,700;1,800&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="/game/style.css" />
   </head>
   <body>
-    <main class="lobby">
-      <h1>AirSports <span>Tennis</span></h1>
-      <p class="tagline">Scan with your phone. Your phone is the racquet.</p>
+    <div id="lobby" class="lobby">
+      <div class="sky"></div>
+      <div class="grass"></div>
 
-      <section class="join">
-        <canvas id="qr" width="280" height="280" aria-label="QR code to join"></canvas>
-        <div class="join-info">
-          <p class="label">Room code</p>
-          <p id="room-code" class="code">····</p>
-          <p class="label">Or open</p>
+      <header class="brand">
+        <h1>AirSports <span>Tennis</span></h1>
+        <p>Your phone is the racquet</p>
+      </header>
+
+      <main class="arena">
+        <section class="side" id="player-side">
+          <div class="figure" id="player-figure">
+            <div class="silhouette"></div>
+          </div>
+          <div class="tag">
+            <span class="face" id="player-face"></span>
+            <span class="tag-name">Player 1</span>
+          </div>
+          <p class="side-status" id="player-status">Waiting for phone…</p>
+        </section>
+
+        <section class="join-card">
+          <p class="join-title">Scan to join</p>
+          <canvas id="qr" width="220" height="220" aria-label="QR code to join"></canvas>
+          <div class="code-row">
+            <span class="code-label">Room</span>
+            <span id="room-code" class="code">····</span>
+          </div>
           <p id="join-url" class="url">connecting…</p>
           <p id="warning" class="warning" hidden></p>
-        </div>
-      </section>
+        </section>
 
-      <section class="players">
-        <div class="player" data-slot="1"><span class="dot"></span>Player 1 <em>waiting…</em></div>
-        <div class="player" data-slot="2"><span class="dot"></span>Player 2 <em>waiting…</em></div>
-      </section>
+        <section class="side ready" id="cpu-side">
+          <div class="figure" id="cpu-figure"></div>
+          <div class="tag">
+            <span class="face" id="cpu-face"></span>
+            <span class="tag-name">Computer</span>
+          </div>
+          <p class="side-status">Ready</p>
+        </section>
+      </main>
 
-      <p id="status" class="status">Connecting to server…</p>
-    </main>
+      <footer class="footer">
+        <button id="start-btn" class="start-btn" disabled>Start</button>
+        <p id="status" class="status">Connecting to server…</p>
+      </footer>
+    </div>
+
+    <div id="game" class="game" hidden></div>
+
     <script type="module" src="/game/main.ts"></script>
   </body>
 </html>

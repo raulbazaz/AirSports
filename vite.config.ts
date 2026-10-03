@@ -12,6 +12,8 @@ export default defineConfig({
   build: {
     outDir: resolve(import.meta.dirname, "dist/client"),
     emptyOutDir: true,
+    // Phaser (~1.2 MB) is its own lazy chunk, loaded only when the match starts.
+    chunkSizeWarningLimit: 1500,
     rollupOptions: {
       input: {
         game: resolve(root, "game/index.html"),

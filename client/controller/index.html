@@ -3,25 +3,30 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, user-scalable=no" />
-    <meta name="theme-color" content="#0f3d2e" />
+    <meta name="theme-color" content="#7cc8f2" />
     <link rel="icon" href="data:," />
     <title>AirSports Racquet</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="/controller/style.css" />
   </head>
   <body>
     <main>
       <h1>AirSports <span>Racquet</span></h1>
 
-      <form id="join-form">
+      <form id="join-form" class="card">
         <label for="code">Room code</label>
         <input id="code" name="code" maxlength="4" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="ABCD" />
         <button id="join-btn" type="submit">Tap to connect racquet</button>
       </form>
 
-      <section id="connected" hidden>
-        <p class="you">You are</p>
-        <p id="slot" class="slot">Player 1</p>
-        <p class="room">Room <strong id="room"></strong></p>
+      <section id="connected" class="card connected" hidden>
+        <div id="avatar" class="avatar"></div>
+        <p class="success">Connected successfully!</p>
+        <p class="who"><span id="slot">Player 1</span> · Room <strong id="room"></strong></p>
+        <p id="hint" class="hint">Press Start on the big screen to play.</p>
+        <button id="bounce-btn" class="bounce-btn" type="button" hidden>Bounce ball</button>
       </section>
 
       <p id="status" class="status"></p>
