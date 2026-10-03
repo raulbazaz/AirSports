@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1, user-scalable=no" />
+    <meta name="theme-color" content="#0f3d2e" />
+    <link rel="icon" href="data:," />
+    <title>AirSports Racquet</title>
+    <link rel="stylesheet" href="/controller/style.css" />
+  </head>
+  <body>
+    <main>
+      <h1>AirSports <span>Racquet</span></h1>
+
+      <form id="join-form">
+        <label for="code">Room code</label>
+        <input id="code" name="code" maxlength="4" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="ABCD" />
+        <button id="join-btn" type="submit">Tap to connect racquet</button>
+      </form>
+
+      <section id="connected" hidden>
+        <p class="you">You are</p>
+        <p id="slot" class="slot">Player 1</p>
+        <p class="room">Room <strong id="room"></strong></p>
+      </section>
+
+      <p id="status" class="status"></p>
+    </main>
+    <script type="module" src="/controller/main.ts"></script>
+  </body>
+</html>

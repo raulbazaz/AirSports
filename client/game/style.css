@@ -1,0 +1,140 @@
+:root {
+  --bg: #0f3d2e;
+  --panel: #14513c;
+  --text: #f4f7f2;
+  --muted: #a9c7b8;
+  --accent: #d9f24a;
+  --off: #557a6a;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: var(--bg);
+  color: var(--text);
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  display: grid;
+  place-items: center;
+}
+
+.lobby {
+  text-align: center;
+  padding: 24px;
+}
+
+h1 {
+  font-size: 3rem;
+  margin: 0;
+  letter-spacing: -0.02em;
+}
+
+h1 span {
+  color: var(--accent);
+}
+
+.tagline {
+  color: var(--muted);
+  margin: 8px 0 32px;
+}
+
+.join {
+  display: flex;
+  gap: 32px;
+  align-items: center;
+  justify-content: center;
+  background: var(--panel);
+  padding: 24px;
+  border-radius: 16px;
+  flex-wrap: wrap;
+}
+
+#qr {
+  background: #fff;
+  border-radius: 8px;
+  width: 280px;
+  height: 280px;
+}
+
+.join-info {
+  text-align: left;
+}
+
+.label {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.code {
+  font-size: 4rem;
+  font-weight: 800;
+  letter-spacing: 0.15em;
+  margin: 0 0 16px;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+
+.url {
+  font-family: ui-monospace, monospace;
+  margin: 4px 0 0;
+  max-width: 360px;
+  word-break: break-all;
+}
+
+.warning {
+  margin-top: 16px;
+  max-width: 360px;
+  color: #ffd27a;
+  font-size: 0.9rem;
+}
+
+.players {
+  display: flex;
+  gap: 16px;
+  justify-content: center;
+  margin-top: 24px;
+}
+
+.player {
+  background: var(--panel);
+  padding: 12px 20px;
+  border-radius: 999px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 600;
+}
+
+.player em {
+  font-style: normal;
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--off);
+}
+
+.player.connected .dot {
+  background: var(--accent);
+  box-shadow: 0 0 8px var(--accent);
+}
+
+.status {
+  color: var(--muted);
+  margin-top: 24px;
+  font-size: 0.9rem;
+}

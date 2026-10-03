@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" href="data:," />
+    <title>AirSports Tennis</title>
+    <link rel="stylesheet" href="/game/style.css" />
+  </head>
+  <body>
+    <main class="lobby">
+      <h1>AirSports <span>Tennis</span></h1>
+      <p class="tagline">Scan with your phone. Your phone is the racquet.</p>
+
+      <section class="join">
+        <canvas id="qr" width="280" height="280" aria-label="QR code to join"></canvas>
+        <div class="join-info">
+          <p class="label">Room code</p>
+          <p id="room-code" class="code">····</p>
+          <p class="label">Or open</p>
+          <p id="join-url" class="url">connecting…</p>
+          <p id="warning" class="warning" hidden></p>
+        </div>
+      </section>
+
+      <section class="players">
+        <div class="player" data-slot="1"><span class="dot"></span>Player 1 <em>waiting…</em></div>
+        <div class="player" data-slot="2"><span class="dot"></span>Player 2 <em>waiting…</em></div>
+      </section>
+
+      <p id="status" class="status">Connecting to server…</p>
+    </main>
+    <script type="module" src="/game/main.ts"></script>
+  </body>
+</html>
