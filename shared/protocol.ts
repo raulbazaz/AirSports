@@ -14,15 +14,26 @@ export type ControllerInput =
       power: number; // 0..1, normalized peak acceleration
       side: "forehand" | "backhand";
       tilt: number; // phone orientation at impact, degrees
-      t: number; // phone timestamp (ms)
-    };
+      t: number; // phone clock (Date.now) at the peak of the swing
+      /** Gyro rotation rate at the peak (DeviceMotionEvent.rotationRate, deg/s). */
+      rate?: { alpha: number; beta: number; gamma: number };
+      /** Phone orientation at the peak (DeviceOrientationEvent angles, degrees). */
+      orient?: { alpha: number; beta: number; gamma: number };
+    }
+  /**
+   * Reply to a host "ping": the phone's clock when it answered (for syncing swing timestamps) and
+   * its own sensor/send rates (debug overlay).
+   */
+  | { type: "pong"; id: number; now: number; sensorHz: number; sentHz: number };
 
 /** Messages the game screen sends to a specific phone. */
 export type HostMessage =
   | { type: "vibrate"; ms: number }
   | { type: "state"; state: "lobby" | "calibrate" | "playing" | "paused" }
   /** Whether the phone's "Bounce ball" button should be enabled. */
-  | { type: "serve"; ready: boolean };
+  | { type: "serve"; ready: boolean }
+  /** The phone answers with a "pong" input right away (clock sync and the debug round trip). */
+  | { type: "ping"; id: number };
 
 export type JoinError = "ROOM_NOT_FOUND" | "ROOM_FULL";
 
@@ -41,6 +52,11 @@ export interface ClientToServerEvents {
   "host:create": (ack: Ack<CreateRoomResult>) => void;
   "host:rejoin": (req: { code: string; hostToken: string }, ack: Ack<RejoinHostResult>) => void;
   "host:send": (req: { slot: PlayerSlot; msg: HostMessage }) => void;
+  /**
+   * Debug overlay: acked immediately, to time the game screen ↔ server leg. Also reports how many
+   * tilts the server received from the room's phone since the last ping (finds which leg drops them).
+   */
+  "net:ping": (ack: Ack<{ tiltsIn: number }>) => void;
   // phone
   "controller:join": (req: { code: string; playerToken?: string }, ack: Ack<JoinResult>) => void;
   "controller:input": (input: ControllerInput) => void;

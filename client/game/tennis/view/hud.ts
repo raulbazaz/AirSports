@@ -1,9 +1,6 @@
 // Heads-up display as plain DOM over the 3D canvas: crisp text at any resolution, styled in CSS.
 
-export interface HudScores {
-  player: number;
-  cpu: number;
-}
+import { pointLabels, type Tally } from "../scoring";
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, className: string, html = "") {
   const e = document.createElement(tag);
@@ -13,9 +10,13 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, className: string, ht
 }
 
 function row(side: "player" | "cpu", name: string) {
-  const root = el("div", `hud-row ${side}`, `<span class="hud-dot"></span><span class="hud-name"></span><span class="hud-pts">0</span>`);
+  const root = el(
+    "div",
+    `hud-row ${side}`,
+    `<span class="hud-flag"></span><span class="hud-name"></span><span class="hud-games">0</span><span class="hud-pts">0</span>`,
+  );
   root.querySelector(".hud-name")!.textContent = name;
-  return { root, pts: root.querySelector<HTMLElement>(".hud-pts")! };
+  return { root, games: root.querySelector<HTMLElement>(".hud-games")!, pts: root.querySelector<HTMLElement>(".hud-pts")! };
 }
 
 export class Hud {
@@ -25,8 +26,16 @@ export class Hud {
   private readonly rally = el("div", "hud-rally", `<small>Rally</small><b>0</b>`);
   private readonly speed = el("div", "hud-speed", `<b>--</b><small>km/h</small>`);
   private readonly marker = el("div", "hud-marker");
-  private readonly hint = el("div", "hud-hint", "Tap <b>Bounce ball</b> on your phone");
-  private readonly pause = el("div", "hud-pause", "<b>Phone disconnected</b><span>Reconnecting…</span>");
+  private readonly hint = el(
+    "div",
+    "hud-hint",
+    `<span class="hud-hint-tag">Serve</span><span class="hud-hint-text">Tap <b>Bounce ball</b> on your phone</span>`,
+  );
+  private readonly pause = el(
+    "div",
+    "hud-pause",
+    `<div class="hud-pause-card"><b>Phone disconnected</b><span>Reconnecting…</span></div>`,
+  );
   private bannerTimer = 0;
 
   constructor(parent: HTMLElement) {
@@ -38,11 +47,12 @@ export class Hud {
     parent.append(this.root);
   }
 
-  setScore(s: HudScores) {
-    for (const [plate, value] of [[this.player, s.player], [this.cpu, s.cpu]] as const) {
-      if (plate.pts.textContent === String(value)) continue;
-      plate.pts.textContent = String(value);
-      bump(plate.pts);
+  setScore(t: Tally) {
+    const pts = pointLabels(t);
+    for (const side of ["player", "cpu"] as const) {
+      const r = this[side];
+      set(r.games, String(t.games[side]));
+      set(r.pts, pts[side]);
     }
   }
 
@@ -74,9 +84,13 @@ export class Hud {
     this.root.querySelector(".hud-banner")?.remove();
     clearTimeout(this.bannerTimer);
     const b = el("div", "hud-banner");
-    b.append(el("div", "hud-banner-title", ""), el("div", "hud-banner-sub", ""));
-    b.children[0].textContent = title;
-    b.children[1].textContent = subtitle ?? "";
+    const card = el("div", "hud-banner-card");
+    const t = el("div", "hud-banner-title");
+    const sub = el("div", "hud-banner-sub");
+    t.textContent = title;
+    sub.textContent = subtitle ?? "";
+    card.append(t, sub);
+    b.append(card);
     this.root.append(b);
     this.bannerTimer = window.setTimeout(() => b.remove(), 1900);
   }
@@ -94,6 +108,12 @@ export class Hud {
     clearTimeout(this.bannerTimer);
     this.root.remove();
   }
+}
+
+function set(e: HTMLElement, text: string) {
+  if (e.textContent === text) return;
+  e.textContent = text;
+  bump(e);
 }
 
 function bump(e: HTMLElement) {

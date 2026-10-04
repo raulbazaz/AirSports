@@ -1,5 +1,5 @@
 import QRCode from "qrcode";
-import type { HostMessage } from "../../shared/protocol";
+import type { ControllerInput, HostMessage } from "../../shared/protocol";
 import { characterSvg, CPU_LOOK, faceSvg, PLAYER_LOOK } from "../characters";
 import { connectSocket } from "../net";
 import type { TennisGame } from "./tennis";
@@ -21,6 +21,7 @@ let phase: Phase = "lobby";
 let playerConnected = false;
 let game: TennisGame | null = null;
 let serveReady = false;
+let audio: AudioContext | null = null;
 
 const socket = connectSocket();
 
@@ -125,6 +126,9 @@ async function startGame() {
   phase = "starting";
   updateLobby();
   lobbyEl.classList.add("leaving");
+  // Sound may only start from a gesture on this page: make it now, before any await.
+  audio ??= new AudioContext();
+  void audio.resume();
 
   const { startTennis } = await import("./tennis");
   gameEl.hidden = false;
@@ -133,8 +137,8 @@ async function startGame() {
       serveReady = ready;
       sendToPhone({ type: "serve", ready });
     },
-    onPlayerHit: () => sendToPhone({ type: "vibrate", ms: 35 }),
-  });
+    onPlayerHit: (quality) => sendToPhone({ type: "vibrate", ms: quality >= 0.8 ? 55 : 30 }),
+  }, audio);
   game.setPlayerConnected(playerConnected);
   lobbyEl.hidden = true;
   phase = "playing";
@@ -158,6 +162,7 @@ startBtn.addEventListener("click", startGame);
 document.addEventListener("keydown", (e) => {
   if ((e.key === "Enter" || e.key === " ") && phase === "lobby") startGame();
   if (e.key === "Escape") exitToLobby();
+  if ((e.key === "d" || e.key === "D") && phase === "playing") game?.debug.toggle();
   // Keyboard stand-ins for the phone, handy for testing: B bounces, Space swings.
   if (phase === "playing" && !e.repeat) {
     if (e.key === "b" || e.key === "B") game?.handleInput({ type: "bounce" });
@@ -196,7 +201,51 @@ socket.on("player:joined", ({ slot, reconnected }) => {
 socket.on("player:left", () => showPlayer(false));
 
 socket.on("player:input", ({ input }) => {
-  if (phase === "playing") game?.handleInput(input);
+  if (input.type === "pong") return onPong(input);
+  if (phase !== "playing") return;
+  game?.handleInput(input, input.type === "swing" ? phoneAge(input.t) : 0);
 });
+
+// ---------- phone clock sync and network timing ----------
+
+// The game pings the phone every second while playing. The phone answers with its clock, which
+// tells us how its Date.now() lines up with ours, so a swing's timestamp says how long ago it
+// really happened (the match rewinds that far to judge it). Like NTP: the reply with the fastest
+// round trip gives the best estimate, so keep the recent best.
+const pings = new Map<number, number>();
+let pingId = 0;
+let lastServerPing = performance.now();
+const clockSamples: { rtt: number; offset: number }[] = [];
+
+setInterval(async () => {
+  if (phase !== "playing" || !socket.connected) return;
+  pings.clear(); // unanswered pings (phone away) don't pile up
+  const id = ++pingId;
+  pings.set(id, Date.now());
+  sendToPhone({ type: "ping", id });
+  if (!game?.debug.visible) return;
+  const t0 = performance.now();
+  const { tiltsIn } = await socket.emitWithAck("net:ping");
+  game?.debug.server(performance.now() - t0, tiltsIn / ((performance.now() - lastServerPing) / 1000));
+  lastServerPing = performance.now();
+}, 1000);
+
+function onPong({ id, now, sensorHz, sentHz }: Extract<ControllerInput, { type: "pong" }>) {
+  const sent = pings.get(id);
+  if (sent === undefined) return;
+  pings.delete(id);
+  const received = Date.now();
+  const rtt = received - sent;
+  clockSamples.push({ rtt, offset: now - (sent + received) / 2 });
+  if (clockSamples.length > 10) clockSamples.shift();
+  game?.debug.phone(rtt, sensorHz, sentHz);
+}
+
+/** How long ago (ms) the phone did something it stamped `t` on its own clock. 0 if unknown. */
+function phoneAge(t: number) {
+  if (!clockSamples.length) return 0;
+  const best = clockSamples.reduce((a, b) => (b.rtt < a.rtt ? b : a));
+  return Math.max(0, Date.now() - (t - best.offset));
+}
 
 updateLobby();

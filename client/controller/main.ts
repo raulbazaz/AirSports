@@ -2,7 +2,7 @@ import type { HostMessage, JoinError } from "../../shared/protocol";
 import { characterSvg, PLAYER_LOOK } from "../characters";
 import { racquetAngle } from "../racquet";
 import { connectSocket } from "../net";
-import { keepAwake, requestSensorPermission, startSwingDetector, startTilt } from "./sensors";
+import { keepAwake, requestSensorPermission, startSwingDetector, startTilt, tiltCounts } from "./sensors";
 
 const $ = <T extends HTMLElement>(sel: string) => document.querySelector<T>(sel)!;
 const form = $<HTMLFormElement>("#join-form");
@@ -53,13 +53,15 @@ function startStreaming() {
     },
     () => setStatus("No motion data from this device. Open this page on a phone.", true),
   );
-  const stopSwings = startSwingDetector((power) => {
+  const stopSwings = startSwingDetector(({ power, t, rate, orient }) => {
     socket.emit("controller:input", {
       type: "swing",
       power,
       side: angle >= 0 ? "forehand" : "backhand",
       tilt: angle,
-      t: Date.now(),
+      t,
+      rate,
+      orient,
     });
   });
   stopTilt = () => {
@@ -138,7 +140,21 @@ socket.on("host:message", (msg) => {
   if (msg.type === "vibrate") navigator.vibrate?.(msg.ms);
   if (msg.type === "state") showGameState(msg.state);
   if (msg.type === "serve") bounceBtn.disabled = !msg.ready;
+  if (msg.type === "ping") pong(msg.id);
 });
+
+/**
+ * Answer the game's ping with our clock (it syncs swing timestamps with it) and, for its debug
+ * overlay, how often the sensor fired and tilts went out since the last one.
+ */
+let rateSince = performance.now();
+function pong(id: number) {
+  const now = performance.now();
+  const s = Math.max(0.001, (now - rateSince) / 1000);
+  socket.emit("controller:input", { type: "pong", id, now: Date.now(), sensorHz: Math.round(tiltCounts.sensor / s), sentHz: Math.round(tiltCounts.sent / s) });
+  tiltCounts.sensor = tiltCounts.sent = 0;
+  rateSince = now;
+}
 
 socket.on("room:closed", () => {
   joinedCode = null;

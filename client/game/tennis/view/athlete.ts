@@ -1,23 +1,33 @@
 import * as THREE from "three";
+import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+import { clone as cloneSkinned } from "three/examples/jsm/utils/SkeletonUtils.js";
 
-// A procedurally built human tennis player with real proportions (~1.83 m) and physically driven
-// motion, no canned animation:
+// A rigged 3D character (client/public/models/athlete.glb) driven by physical, procedural motion
+// instead of canned animation:
 // - Feet are planted in the world and step when the body moves away from them (no foot sliding);
 //   legs reach them by two-bone IK, and the pelvis height follows from how far the legs can reach.
 // - The torso is spring-damped: it leans into acceleration and twists with the racquet arm.
 // - The free arm swings against the legs and points forward on the backswing, with momentum.
 // - The head tracks a look target (the ball).
-// The model faces +z with its right (racquet) hand on -x.
+// - Strokes: the shoulders coil and uncoil with the swing (hips lead), a split step when the
+//   opponent strikes, the front foot steps in at contact; the racquet hand grips (curled fingers)
+//   and the forearm and wrist turn with the racquet.
+//
+// The motion runs on an invisible "driver" skeleton of plain groups whose joints are measured from
+// the model, so its feet and hands land exactly where the model's do. Each frame the driver's
+// joint rotations are copied onto the model's bones (retargeting). The model faces +z with its
+// right (racquet) hand on -x.
+
+const MODEL_URL = "/models/athlete.glb";
+const HEIGHT = 1.83;
 
 export interface Look {
   skin: number;
   hair: number;
   shirt: number;
-  trim: number;
   shorts: number;
-  shoes: number;
   socks: number;
-  hairStyle: "short" | "buzz";
+  shoes: number;
 }
 
 // Same colours as the lobby characters (client/characters.ts).
@@ -25,45 +35,43 @@ export const PLAYER_LOOK: Look = {
   skin: 0xf2c9a5,
   hair: 0x6b3f22,
   shirt: 0x2f7de1,
-  trim: 0xffffff,
   shorts: 0xf4f4f4,
-  shoes: 0xf7f7f7,
   socks: 0xffffff,
-  hairStyle: "short",
+  shoes: 0xf2f2f2,
 };
 
 export const CPU_LOOK: Look = {
   skin: 0xa8694a,
   hair: 0x221812,
   shirt: 0xf08a24,
-  trim: 0xffffff,
   shorts: 0xf4f4f4,
-  shoes: 0x3a3f47,
   socks: 0xffffff,
-  hairStyle: "buzz",
+  shoes: 0x3a3f47,
 };
 
-const SEG = { thigh: 0.45, shin: 0.44, upper: 0.29, fore: 0.26 };
-const ANKLE_Y = 0.08;
-const HIP = { x: 0.095, y: -0.06 }; // hip joints relative to the pelvis pivot
-const LEG_MAX = (SEG.thigh + SEG.shin) * 0.985;
+/** Model material name → which colour of the Look paints it. */
+const PAINT: Record<string, keyof Look | null> = {
+  Skin: "skin",
+  Hair: "hair",
+  Shirt: "shirt",
+  Pants: "shorts",
+  Socks: "socks",
+  Shoes: "shoes",
+  Eyes: null,
+};
+
+/** The loaded character, shared by both players (each gets its own clone). */
+export interface AthleteAsset {
+  scene: THREE.Object3D;
+}
+
+export async function loadAthlete(): Promise<AthleteAsset> {
+  const gltf = await new GLTFLoader().loadAsync(MODEL_URL);
+  return { scene: gltf.scene };
+}
+
 const DOWN = new THREE.Vector3(0, -1, 0);
-
-const mat = (color: number) => new THREE.MeshLambertMaterial({ color });
-
-function mesh(geo: THREE.BufferGeometry, material: THREE.Material, at?: [number, number, number], scale?: [number, number, number]) {
-  const m = new THREE.Mesh(geo, material);
-  if (at) m.position.set(...at);
-  if (scale) m.scale.set(...scale);
-  return m;
-}
-
-/** A lathe-turned body part from a [radius, y] profile (y down from the joint is negative). */
-function lathe(profile: [number, number][], material: THREE.Material, segments = 12, depth = 1) {
-  const g = new THREE.LatheGeometry(profile.map(([r, y]) => new THREE.Vector2(r, y)), segments);
-  if (depth !== 1) g.scale(1, 1, depth);
-  return new THREE.Mesh(g, material);
-}
+const FORWARD = new THREE.Vector3(0, 0, 1);
 
 /** Critically-ish damped spring on a scalar. */
 class Spring {
@@ -84,12 +92,43 @@ interface Foot {
   lift: number;
   yaw: number;
   fromYaw: number;
+  /** A deliberate step (the front foot at contact) lands here instead of under the hip. */
+  to: THREE.Vector3 | null;
+  /** Stay planted until this time (s): don't tidy a deliberate step away at once. */
+  holdUntil: number;
 }
 
+/** A hand bone and its rest frame, for turning the hand with the racquet. */
+interface Hand {
+  palm: THREE.Object3D;
+  /** World rotation of the palm at rest, and its axes then: toward the fingers, toward the thumb. */
+  rest: THREE.Quaternion;
+  down: THREE.Vector3;
+  thumb: THREE.Vector3;
+  /** Racquet grip (middle of the fist) in the palm's frame. */
+  grip: THREE.Vector3;
+}
+
+/** Fingers curl toward the palm by these angles (radians): a fist on the handle, a loose free hand. */
+const GRIP_CURL = { knuckle: 1.25, finger: 1.35, thumb: 0.5 };
+const LOOSE_CURL = { knuckle: 0.45, finger: 0.5, thumb: 0.15 };
+/** Share of the hand's roll taken by the forearm (the rest is the wrist). */
+const FOREARM_ROLL = 0.7;
+
+/** A driver limb: groups hanging along -y at rest. */
 interface Limb {
   upper: THREE.Group;
   lower: THREE.Group;
   end: THREE.Group;
+}
+
+/** A driver group and the model bone it moves; `rest` is the bone's world rotation at rest. */
+interface Link {
+  driver: THREE.Object3D;
+  bone: THREE.Object3D;
+  rest: THREE.Quaternion;
+  /** Also copy the driver's world position (bones that aren't attached to their chain). */
+  place?: boolean;
 }
 
 const tmp = {
@@ -100,7 +139,7 @@ const tmp = {
   q2: new THREE.Quaternion(),
 };
 
-/** Rotate `upper`/`lower` (bones hanging along -y at rest) so their end reaches `target`. */
+/** Rotate `upper`/`lower` (hanging along -y at rest) so their end reaches `target`. */
 function solveTwoBone(limb: Limb, a: number, b: number, target: THREE.Vector3, pole: THREE.Vector3) {
   const { upper, lower } = limb;
   const S = upper.getWorldPosition(new THREE.Vector3());
@@ -124,8 +163,28 @@ function solveTwoBone(limb: Limb, a: number, b: number, target: THREE.Vector3, p
   lower.quaternion.copy(qU.invert().multiply(qF));
 }
 
+/** Give `o` this world rotation (its parent's world matrix must be current). */
+function setWorldQuaternion(o: THREE.Object3D, q: THREE.Quaternion) {
+  const parentQ = o.parent!.getWorldQuaternion(tmp.q2);
+  o.quaternion.copy(parentQ.invert().multiply(q));
+  o.updateWorldMatrix(false, true);
+}
+
+/** Turn a bone (in world space) so the direction `from` → its child joint points along `to`. */
+function aim(bone: THREE.Object3D, child: THREE.Object3D, to: THREE.Vector3) {
+  const dir = child.getWorldPosition(new THREE.Vector3()).sub(bone.getWorldPosition(new THREE.Vector3())).normalize();
+  const q = bone.getWorldQuaternion(new THREE.Quaternion()).premultiply(new THREE.Quaternion().setFromUnitVectors(dir, to));
+  setWorldQuaternion(bone, q);
+}
+
+const wp = (o: THREE.Object3D) => o.getWorldPosition(new THREE.Vector3());
+
 export class AthleteModel {
   readonly root = new THREE.Group();
+  /** Shoulder to grip at full stretch (m). */
+  readonly armLength: number;
+
+  // ---- Driver skeleton (invisible) ----
   private readonly pelvis = new THREE.Group();
   private readonly spine = new THREE.Group();
   private readonly chest = new THREE.Group();
@@ -134,7 +193,18 @@ export class AthleteModel {
   private readonly legs: [Limb, Limb]; // right, left
   private readonly racquetArm: Limb;
   private readonly freeArm: Limb;
+  private readonly links: Link[] = [];
 
+  // ---- Measured from the model ----
+  private readonly seg: { thigh: number; shin: number; upper: number; fore: number };
+  private readonly ankleY: number;
+  private readonly hips: [THREE.Vector3, THREE.Vector3]; // hip joints relative to the pelvis pivot
+  private readonly legMax: number;
+  private readonly grip = new THREE.Vector3(); // racquet grip in the hand's frame
+  private readonly hand: Hand;
+  private readonly headTop = new THREE.Vector3();
+
+  // ---- Simulation state ----
   private readonly feet: [Foot, Foot];
   private feetReady = false;
   private readonly lastRoot = new THREE.Vector3();
@@ -152,131 +222,191 @@ export class AthleteModel {
   private lookTarget: THREE.Vector3 | null = null;
   /** Racquet hand in model space, last frame (drives torso twist and the balancing arm). */
   private readonly handLocal = new THREE.Vector3(-0.3, 1.0, 0.25);
-  private readonly freeHand = { x: new Spring(0.3, 13, 0.7), y: new Spring(1.0, 13, 0.7), z: new Spring(0.25, 13, 0.7) };
+  private readonly freeHand = { x: new Spring(0.3, 13, 0.7), y: new Spring(0.85, 13, 0.7), z: new Spring(0.25, 13, 0.7) };
+  /** Extra shoulder turn from the stroke (radians; + turns the racquet side forward). */
+  private coil = 0;
+  /** Split step progress (s since it started), or -1. */
+  private split = -1;
+  private clock = 0;
 
-  constructor(look: Look, private readonly facing: number) {
+  constructor(asset: AthleteAsset, look: Look, private readonly facing: number) {
     this.yaw = facing;
-    const skin = mat(look.skin);
-    const shirt = mat(look.shirt);
-    const trim = mat(look.trim);
-    const shorts = mat(look.shorts);
-    const shoes = mat(look.shoes);
-    const socks = mat(look.socks);
-    const hair = mat(look.hair);
-    const sole = mat(0xd8d8d8);
-    const dark = new THREE.MeshBasicMaterial({ color: 0x241a14 });
-    const white = new THREE.MeshBasicMaterial({ color: 0xf6f6f6 });
-    const lips = mat(0xb5655a);
 
+    // ---- The model: scaled to height, feet on the ground, recoloured ----
+    const model = cloneSkinned(asset.scene);
+    model.updateMatrixWorld(true); // the skinned bounds below are computed from the bones
+    const box = new THREE.Box3().setFromObject(model);
+    const scale = HEIGHT / (box.max.y - box.min.y);
+    const holder = new THREE.Group();
+    holder.scale.setScalar(scale);
+    holder.position.y = -box.min.y * scale;
+    holder.add(model);
+    this.root.add(holder);
+    model.traverse((o) => {
+      if (!(o instanceof THREE.Mesh)) return;
+      o.frustumCulled = false; // bones move it away from its bind-pose bounds
+      const paint = (m: THREE.Material) => {
+        const src = m as THREE.MeshStandardMaterial;
+        const key = PAINT[src.name];
+        const color = key ? look[key] : src.color.getHex();
+        return new THREE.MeshLambertMaterial({ name: src.name, color });
+      };
+      o.material = Array.isArray(o.material) ? o.material.map(paint) : paint(o.material);
+    });
+    this.root.updateMatrixWorld(true);
+
+    const bone = (name: string) => {
+      // The "_end" tips aren't skinned, so they load as plain nodes rather than bones.
+      const b = model.getObjectByName(name);
+      if (!b) throw new Error(`athlete model has no bone "${name}"`);
+      return b;
+    };
+    const B = {
+      body: bone("Body"),
+      abdomen: bone("Abdomen"),
+      torso: bone("Torso"),
+      neck: bone("Neck"),
+      head: bone("Head"),
+      headEnd: bone("Head_end"),
+    };
+    const legBones = (s: "R" | "L") => ({
+      upper: bone(`UpperLeg${s}`),
+      lower: bone(`LowerLeg${s}`),
+      ankle: bone(`LowerLeg${s}_end`),
+      foot: bone(`Foot${s}`),
+      toe: bone(`Foot${s}_end`),
+    });
+    const armBones = (s: "R" | "L") => ({
+      upper: bone(`UpperArm${s}`),
+      lower: bone(`LowerArm${s}`),
+      palm: bone(`Palm${s}`),
+      hand: bone(`MiddleHand${s}`),
+      fingers: bone(`Fingers${s}`),
+    });
+    const L = [legBones("R"), legBones("L")] as const;
+    const A = [armBones("R"), armBones("L")] as const;
+
+    // The shoe soles sit on the ground with the foot bones at ankle height.
+    this.ankleY = (wp(L[0].foot).y + wp(L[1].foot).y) / 2;
+
+    // ---- Put the model in the driver's rest pose: limbs straight down, feet straight ahead ----
+    for (const l of L) {
+      aim(l.upper, l.lower, DOWN);
+      aim(l.lower, l.ankle, DOWN);
+      aim(l.foot, l.toe, FORWARD);
+    }
+    for (const a of A) {
+      aim(a.upper, a.lower, DOWN);
+      aim(a.lower, a.palm, DOWN);
+    }
+
+    // ---- Measure it ----
+    const pelvisAt = wp(B.body);
+    const avg = (f: (i: 0 | 1) => number) => (f(0) + f(1)) / 2;
+    this.seg = {
+      thigh: avg((i) => wp(L[i].upper).distanceTo(wp(L[i].lower))),
+      shin: avg((i) => wp(L[i].lower).distanceTo(wp(L[i].ankle))),
+      upper: avg((i) => wp(A[i].upper).distanceTo(wp(A[i].lower))),
+      fore: avg((i) => wp(A[i].lower).distanceTo(wp(A[i].palm))),
+    };
+    this.legMax = (this.seg.thigh + this.seg.shin) * 0.985;
+    this.hips = [wp(L[0].upper).sub(pelvisAt), wp(L[1].upper).sub(pelvisAt)];
+    this.grip.copy(wp(A[0].hand).add(wp(A[0].fingers)).multiplyScalar(0.5).sub(wp(A[0].palm)));
+    this.armLength = this.seg.upper + this.seg.fore + this.grip.length();
+    this.headTop.copy(wp(B.headEnd).sub(wp(B.head)));
+    this.pelvisY = pelvisAt.y;
+
+    // ---- Hands: grip the racquet, relax the other one ----
+    const midline = pelvisAt.x;
+    const curl = (i: 0 | 1, c: typeof GRIP_CURL) => {
+      const h = A[i];
+      const fingerDir = wp(bone(`Fingers${i ? "L" : "R"}_end`)).sub(wp(h.hand)).normalize();
+      const towardBody = new THREE.Vector3(Math.sign(midline - wp(h.palm).x), 0, 0);
+      const axis = fingerDir.clone().cross(towardBody).normalize();
+      const turn = (b: THREE.Object3D, angle: number, about = axis) =>
+        setWorldQuaternion(b, b.getWorldQuaternion(new THREE.Quaternion()).premultiply(new THREE.Quaternion().setFromAxisAngle(about, angle)));
+      turn(h.hand, c.knuckle);
+      turn(h.fingers, c.finger);
+      turn(bone(`Thumb1${i ? "L" : "R"}`), c.thumb, fingerDir);
+    };
+    const palmRest = (() => {
+      const h = A[0];
+      const down = wp(h.hand).sub(wp(h.palm)).normalize();
+      const thumb = wp(bone("Thumb1R")).sub(wp(h.hand));
+      thumb.addScaledVector(down, -thumb.dot(down)).normalize();
+      return { down, thumb };
+    })();
+    curl(0, GRIP_CURL);
+    curl(1, LOOSE_CURL);
+    this.root.updateMatrixWorld(true);
+    const palm = A[0].palm;
+    this.hand = {
+      palm,
+      rest: palm.getWorldQuaternion(new THREE.Quaternion()),
+      ...palmRest,
+      grip: palm.worldToLocal(wp(A[0].hand).add(wp(A[0].fingers)).multiplyScalar(0.5)),
+    };
+
+    // ---- Build the driver to the same measurements ----
     this.root.add(this.pelvis);
-    this.root.rotation.y = facing;
-
-    // ---- Hips and legs ----
-    this.pelvis.add(mesh(new THREE.SphereGeometry(0.17, 16, 10), shorts, [0, -0.03, 0], [1, 0.75, 0.72]));
-    this.legs = [-1, 1].map((side) => {
-      const upper = new THREE.Group();
-      upper.position.set(side * HIP.x, HIP.y, 0);
-      upper.add(
-        lathe([[0.001, 0.05], [0.08, 0.035], [0.088, -0.06], [0.08, -0.22], [0.064, -0.38], [0.055, -0.45], [0.001, -0.47]], skin),
-      );
-      const leg = lathe([[0.096, 0.05], [0.1, -0.06], [0.094, -0.22], [0.09, -0.23]], shorts);
-      (leg.material as THREE.MeshLambertMaterial).side = THREE.DoubleSide;
-      upper.add(leg);
-      const lower = new THREE.Group();
-      lower.position.y = -SEG.thigh;
-      lower.add(mesh(new THREE.SphereGeometry(0.056, 10, 8), skin));
-      lower.add(lathe([[0.001, 0.02], [0.05, 0.01], [0.06, -0.11], [0.048, -0.27], [0.036, -0.4], [0.001, -0.44]], skin));
-      const sock = lathe([[0.042, -0.3], [0.04, -0.36], [0.04, -0.44]], socks);
-      lower.add(sock);
-      const end = new THREE.Group();
-      end.position.y = -SEG.shin;
-      end.add(mesh(new THREE.SphereGeometry(1, 14, 10), shoes, [0, -0.035, 0.05], [0.055, 0.048, 0.13]));
-      end.add(mesh(new THREE.BoxGeometry(0.1, 0.022, 0.26), sole, [0, -0.07, 0.05]));
-      lower.add(end);
-      upper.add(lower);
-      this.pelvis.add(upper);
-      return { upper, lower, end };
-    }) as [Limb, Limb];
-
-    // ---- Torso ----
-    this.spine.position.y = 0.04;
+    this.pelvis.position.copy(pelvisAt);
     this.pelvis.add(this.spine);
-    this.spine.add(lathe([[0.001, -0.06], [0.145, -0.05], [0.142, 0.08], [0.15, 0.24], [0.001, 0.25]], shirt, 16, 0.68));
-    this.chest.position.y = 0.22;
+    this.spine.position.copy(wp(B.abdomen).sub(pelvisAt));
     this.spine.add(this.chest);
-    this.chest.add(
-      lathe(
-        [[0.001, -0.04], [0.15, -0.03], [0.168, 0.08], [0.188, 0.19], [0.195, 0.24], [0.15, 0.29], [0.07, 0.31], [0.001, 0.312]],
-        shirt,
-        16,
-        0.62,
-      ),
-    );
-    const collar = mesh(new THREE.TorusGeometry(0.058, 0.012, 6, 16), trim, [0, 0.3, 0.004]);
-    collar.rotation.x = Math.PI / 2;
-    this.chest.add(collar);
-
-    // ---- Neck and head ----
-    this.neck.position.y = 0.28;
+    this.chest.position.copy(wp(B.torso).sub(wp(B.abdomen)));
     this.chest.add(this.neck);
-    this.neck.add(mesh(new THREE.CylinderGeometry(0.05, 0.058, 0.14, 10), skin, [0, 0.05, 0]));
-    this.head.position.y = 0.1;
-    this.head.rotation.order = "YXZ";
+    this.neck.position.copy(wp(B.neck).sub(wp(B.torso)));
     this.neck.add(this.head);
-    this.head.add(mesh(new THREE.SphereGeometry(0.105, 18, 14), skin, [0, 0.115, -0.005], [0.9, 1.06, 1]));
-    this.head.add(mesh(new THREE.SphereGeometry(0.085, 14, 10), skin, [0, 0.055, 0.018], [0.86, 0.85, 0.98]));
-    this.head.add(mesh(new THREE.SphereGeometry(0.02, 8, 6), skin, [0, 0.09, 0.1], [0.9, 1.3, 1.2]));
-    this.head.add(mesh(new THREE.BoxGeometry(0.036, 0.009, 0.01), lips, [0, 0.042, 0.092]));
-    for (const side of [-1, 1]) {
-      this.head.add(mesh(new THREE.SphereGeometry(0.022, 8, 6), skin, [side * 0.094, 0.1, -0.005], [0.45, 1, 0.75]));
-      this.head.add(mesh(new THREE.SphereGeometry(0.015, 8, 6), white, [side * 0.036, 0.118, 0.086], [1.15, 0.75, 0.5]));
-      this.head.add(mesh(new THREE.SphereGeometry(0.0085, 8, 6), dark, [side * 0.036, 0.118, 0.093]));
-      const brow = mesh(new THREE.BoxGeometry(0.036, 0.008, 0.01), hair, [side * 0.037, 0.142, 0.092]);
-      brow.rotation.z = side * -0.12;
-      this.head.add(brow);
-    }
-    const buzz = look.hairStyle === "buzz";
-    const cap = mesh(
-      new THREE.SphereGeometry(0.11, 18, 10, 0, Math.PI * 2, 0, Math.PI * (buzz ? 0.5 : 0.56)),
-      hair,
-      [0, buzz ? 0.122 : 0.128, -0.008],
-      buzz ? [0.93, 1.04, 1.04] : [0.97, 1.12, 1.08],
-    );
-    cap.rotation.x = -0.4;
-    this.head.add(cap);
-    if (!buzz) {
-      const fringe = mesh(new THREE.SphereGeometry(0.06, 10, 6), hair, [0.02, 0.2, 0.06], [1.5, 0.45, 0.8]);
-      fringe.rotation.z = -0.2;
-      this.head.add(fringe);
-    }
+    this.head.position.copy(wp(B.head).sub(wp(B.neck)));
+    this.head.rotation.order = "YXZ";
 
-    // ---- Arms ----
-    const makeArm = (side: number): Limb => {
+    const limb = (parent: THREE.Object3D, at: THREE.Vector3, a: number, b: number): Limb => {
       const upper = new THREE.Group();
-      upper.position.set(side * 0.19, 0.235, 0);
-      upper.add(mesh(new THREE.SphereGeometry(0.068, 12, 8), shirt));
-      upper.add(lathe([[0.001, 0.03], [0.05, 0.02], [0.054, -0.08], [0.045, -0.22], [0.04, -0.29], [0.001, -0.31]], skin));
-      const sleeve = lathe([[0.07, 0.04], [0.066, -0.06], [0.062, -0.13]], shirt);
-      (sleeve.material as THREE.MeshLambertMaterial).side = THREE.DoubleSide;
-      upper.add(sleeve);
       const lower = new THREE.Group();
-      lower.position.y = -SEG.upper;
-      lower.add(mesh(new THREE.SphereGeometry(0.042, 8, 6), skin));
-      lower.add(lathe([[0.001, 0.02], [0.042, 0.01], [0.045, -0.06], [0.032, -0.24], [0.001, -0.27]], skin));
       const end = new THREE.Group();
-      end.position.y = -SEG.fore;
-      end.add(mesh(new THREE.SphereGeometry(1, 10, 8), skin, [0, -0.045, 0.005], [0.04, 0.055, 0.03]));
-      end.add(mesh(new THREE.SphereGeometry(0.016, 6, 5), skin, [side * -0.03, -0.03, 0.02], [1, 1.6, 1]));
-      lower.add(end);
+      upper.position.copy(at);
+      lower.position.y = -a;
+      end.position.y = -b;
+      parent.add(upper);
       upper.add(lower);
-      this.chest.add(upper);
+      lower.add(end);
       return { upper, lower, end };
     };
-    this.racquetArm = makeArm(-1);
-    this.freeArm = makeArm(1);
-    this.racquetArm.lower.add(lathe([[0.041, -0.18], [0.04, -0.23]], trim));
+    this.legs = [0, 1].map((i) => limb(this.pelvis, this.hips[i], this.seg.thigh, this.seg.shin)) as [Limb, Limb];
+    const shoulder = (i: 0 | 1) => wp(A[i].upper).sub(wp(B.torso));
+    this.racquetArm = limb(this.chest, shoulder(0), this.seg.upper, this.seg.fore);
+    this.freeArm = limb(this.chest, shoulder(1), this.seg.upper, this.seg.fore);
 
-    const foot = (): Foot => ({ pos: new THREE.Vector3(), from: new THREE.Vector3(), t: -1, dur: 0.25, lift: 0.08, yaw: facing, fromYaw: facing });
+    // ---- Link driver → model, in parent-before-child order ----
+    const link = (driver: THREE.Object3D, b: THREE.Object3D, place = false) =>
+      this.links.push({ driver, bone: b, rest: b.getWorldQuaternion(new THREE.Quaternion()), place });
+    link(this.pelvis, B.body, true);
+    link(this.spine, B.abdomen);
+    link(this.chest, B.torso);
+    link(this.neck, B.neck);
+    link(this.head, B.head);
+    [this.racquetArm, this.freeArm].forEach((arm, i) => {
+      link(arm.upper, A[i].upper);
+      link(arm.lower, A[i].lower);
+    });
+    this.legs.forEach((leg, i) => {
+      link(leg.upper, L[i].upper);
+      link(leg.lower, L[i].lower);
+      link(leg.end, L[i].foot, true); // the feet are IK bones of their own, not on the leg chain
+    });
+
+    this.root.rotation.y = facing;
+    const foot = (): Foot => ({
+      pos: new THREE.Vector3(),
+      from: new THREE.Vector3(),
+      t: -1,
+      dur: 0.25,
+      lift: 0.08,
+      yaw: facing,
+      fromYaw: facing,
+      to: null,
+      holdUntil: 0,
+    });
     this.feet = [foot(), foot()];
   }
 
@@ -285,11 +415,39 @@ export class AthleteModel {
     this.lookTarget = p ? (this.lookTarget ?? new THREE.Vector3()).copy(p) : null;
   }
 
+  /** Extra shoulder turn for the stroke (radians; + turns the racquet side forward). */
+  setCoil(c: number) {
+    this.coil = c;
+  }
+
+  /** The little hop-and-land ready move as the opponent strikes. */
+  splitStep() {
+    this.split = 0;
+  }
+
+  /** Step the front foot in toward the ball for the stroke (left foot on a forehand). */
+  plantFront(stroke: "forehand" | "backhand") {
+    const i = stroke === "forehand" ? 1 : 0;
+    const f = this.feet[i];
+    const side = i === 0 ? -1 : 1; // model +x is the left side
+    const across = stroke === "forehand" ? -0.08 : 0.08;
+    f.from.copy(f.pos);
+    f.fromYaw = f.yaw;
+    f.to = this.root.localToWorld(new THREE.Vector3(side * 0.16 + across, 0, 0.42));
+    f.to.y = 0;
+    f.t = 0;
+    f.dur = 0.16;
+    f.lift = 0.06;
+    f.holdUntil = this.clock + 0.55;
+  }
+
   /** Simulate the body for this frame. `vx`/`vz` is the velocity in scene space (m/s). */
   update(dt: number, time: number, vx: number, vz: number) {
+    this.clock += dt;
     const root = this.root.position;
     const speed = Math.hypot(vx, vz);
     const run = THREE.MathUtils.smoothstep(speed, 0.6, 5);
+    const { thigh, shin, upper, fore } = this.seg;
 
     // Facing: turn toward the run direction for long runs, shuffle sideways for short ones.
     let target = this.facing;
@@ -317,7 +475,7 @@ export class AthleteModel {
     const velFwd = vx * fx + vz * fz;
 
     // ---- Feet ----
-    const width = 0.19 * (1 - run) + 0.1 * run;
+    const width = 0.17 * (1 - run) + 0.09 * run;
     const desired = (i: number, lead: number, out: THREE.Vector3) => {
       const side = i === 0 ? -1 : 1;
       return out.set(root.x + rx * side * width + vx * lead, 0, root.z + rz * side * width + vz * lead);
@@ -339,17 +497,20 @@ export class AthleteModel {
       if (f.t < 0) return;
       f.t = Math.min(1, f.t + dt / f.dur);
       const e = smooth(f.t);
-      const to = tmp.a.copy(want[i]).addScaledVector(tmp.b.set(vx, 0, vz), f.dur * (1 - f.t) * 0.6);
+      const to = f.to ?? tmp.a.copy(want[i]).addScaledVector(tmp.b.set(vx, 0, vz), f.dur * (1 - f.t) * 0.6);
       f.pos.lerpVectors(f.from, to, e);
       f.yaw = f.fromYaw + angleDiff(this.yaw, f.fromYaw) * e;
-      if (f.t >= 1) f.t = -1;
+      if (f.t >= 1) {
+        f.t = -1;
+        f.to = null;
+      }
     });
     // Start the next step with whichever planted foot is furthest from where it should be.
     const threshold = 0.1 + speed * 0.06;
     let pick = -1;
     let worst = threshold;
     this.feet.forEach((f, i) => {
-      if (f.t >= 0) return;
+      if (f.t >= 0 || (this.clock < f.holdUntil && speed < 1.5)) return;
       const other = this.feet[1 - i];
       const err = Math.max(f.pos.distanceTo(want[i]), Math.abs(angleDiff(this.yaw, f.yaw)) * 0.3);
       const free = other.t < 0 || other.t > 0.65 || err > 0.8;
@@ -369,18 +530,27 @@ export class AthleteModel {
 
     // ---- Pelvis: as high as the stance allows, lower in the ready crouch ----
     const bounce = Math.sin(time * 0.009) * (1 - run);
-    const crouch = 0.11 * (1 - run) + 0.05 * run + bounce * 0.012;
-    let top = ANKLE_Y + SEG.thigh + SEG.shin - crouch - HIP.y;
+    const crouch = 0.1 * (1 - run) + 0.05 * run + bounce * 0.012;
+    const hipY = (this.hips[0].y + this.hips[1].y) / 2;
+    let top = this.ankleY + thigh + shin - crouch - hipY;
     this.feet.forEach((f, i) => {
-      const side = i === 0 ? -1 : 1;
-      const hx = root.x + rx * side * HIP.x;
-      const hz = root.z + rz * side * HIP.x;
+      const h = this.hips[i];
+      const hx = root.x + rx * h.x + fx * h.z;
+      const hz = root.z + rz * h.x + fz * h.z;
       const horiz = Math.hypot(f.pos.x - hx, f.pos.z - hz);
-      const ankleY = ANKLE_Y + (f.t >= 0 ? Math.sin(Math.PI * f.t) * f.lift : 0);
-      top = Math.min(top, ankleY + Math.sqrt(Math.max(0, LEG_MAX * LEG_MAX - horiz * horiz)) - HIP.y);
+      const ankleY = this.ankleY + (f.t >= 0 ? Math.sin(Math.PI * f.t) * f.lift : 0);
+      top = Math.min(top, ankleY + Math.sqrt(Math.max(0, this.legMax * this.legMax - horiz * horiz)) - h.y);
     });
     this.pelvisY += (top - this.pelvisY) * Math.min(1, dt * 25);
-    this.pelvis.position.y = this.pelvisY;
+    // Split step: a quick dip and spring back up, ready to push off either way.
+    let dip = 0;
+    if (this.split >= 0) {
+      this.split += dt;
+      const t = this.split / 0.32;
+      if (t >= 1) this.split = -1;
+      else dip = Math.sin(Math.PI * t) * 0.09;
+    }
+    this.pelvis.position.y = this.pelvisY - dip;
 
     // ---- Torso: lean into acceleration, twist with the racquet ----
     const pitch = this.pitch.step(0.1 * (1 - run) + 0.2 * run + THREE.MathUtils.clamp(accFwd * 0.025, -0.2, 0.25) + velFwd * 0.01, dt);
@@ -388,7 +558,8 @@ export class AthleteModel {
     const twist = this.twist.step(this.twistTarget, dt);
     // Hips counter-rotate with the stride.
     const stride = this.footLocalZ(0) - this.footLocalZ(1);
-    const hipTwist = THREE.MathUtils.clamp(stride * 0.35, -0.3, 0.3) + twist * 0.25;
+    // The hips lead the shoulders through the stroke.
+    const hipTwist = THREE.MathUtils.clamp(stride * 0.35, -0.3, 0.3) + twist * 0.4;
     this.pelvis.rotation.set(pitch * 0.25, hipTwist, roll * 0.3);
     this.spine.rotation.set(pitch * 0.45, twist * 0.35 - hipTwist * 0.6, roll * 0.4);
     this.chest.rotation.set(pitch * 0.3, twist * 0.4 - hipTwist * 0.4, roll * 0.3);
@@ -398,9 +569,9 @@ export class AthleteModel {
     const knee = tmp.c.set(fx, 0, fz);
     this.feet.forEach((f, i) => {
       const lift = f.t >= 0 ? Math.sin(Math.PI * f.t) * f.lift : 0;
-      const ankle = new THREE.Vector3(f.pos.x, ANKLE_Y + lift, f.pos.z);
+      const ankle = new THREE.Vector3(f.pos.x, this.ankleY + lift, f.pos.z);
       const leg = this.legs[i];
-      solveTwoBone(leg, SEG.thigh, SEG.shin, ankle, knee);
+      solveTwoBone(leg, thigh, shin, ankle, knee);
       // Shoe flat on the ground (toes turned out a touch), rolling off the toes mid-step.
       const toe = f.t >= 0 ? -Math.sin(Math.PI * f.t) * 0.35 : 0;
       const footQ = tmp.q.setFromEuler(new THREE.Euler(toe, f.yaw + (i === 0 ? -0.12 : 0.12), 0, "YXZ"));
@@ -417,7 +588,7 @@ export class AthleteModel {
     const fhy = fh.y.step(hipBase + 0.02 + prep * 0.35 + run * 0.08, dt);
     const fhz = fh.z.step(0.18 + prep * 0.25 - stride * 0.6 * run, dt);
     const freeTarget = this.root.localToWorld(new THREE.Vector3(fhx, fhy, fhz));
-    solveTwoBone(this.freeArm, SEG.upper, SEG.fore, freeTarget, this.toWorldDir(0.8, -1, -0.7));
+    solveTwoBone(this.freeArm, upper, fore, freeTarget, this.toWorldDir(0.8, -1, -0.7));
 
     // ---- Head tracks the look target ----
     let yawT = 0;
@@ -429,6 +600,7 @@ export class AthleteModel {
       pitchT = THREE.MathUtils.clamp(-Math.atan2(local.y, Math.hypot(local.x, local.z)), -0.6, 0.6);
     }
     this.head.rotation.set(this.headPitch.step(pitchT, dt), this.headYaw.step(yawT, dt), 0);
+    this.retarget();
   }
 
   private footLocalZ(i: number) {
@@ -437,29 +609,80 @@ export class AthleteModel {
     return (f.x - r.x) * Math.sin(this.yaw) + (f.z - r.z) * Math.cos(this.yaw);
   }
 
+  /** Copy the driver's pose onto the model's bones. */
+  private retarget() {
+    this.root.updateMatrixWorld(true);
+    for (const { driver, bone, rest, place } of this.links) {
+      bone.parent!.updateWorldMatrix(true, false);
+      if (place) bone.position.copy(bone.parent!.worldToLocal(driver.getWorldPosition(tmp.a)));
+      // The driver's rest pose has no rotation, so its world rotation is the change from rest.
+      setWorldQuaternion(bone, driver.getWorldQuaternion(tmp.q).multiply(rest));
+    }
+  }
+
   /** World position of the racquet shoulder (after `update`). */
   shoulderWorld(out = new THREE.Vector3()) {
     this.root.updateMatrixWorld(true);
     return this.racquetArm.upper.getWorldPosition(out);
   }
 
-  /** Put the racquet hand at `target` (world), bending the elbow toward `pole`. */
-  reach(target: THREE.Vector3, pole: THREE.Vector3) {
-    solveTwoBone(this.racquetArm, SEG.upper, SEG.fore, target, pole);
+  /**
+   * Put the racquet hand at `target` (world), bending the elbow toward `pole`. With `shaft` (the
+   * racquet's direction, world), the forearm and wrist turn so the fist holds it.
+   */
+  reach(target: THREE.Vector3, pole: THREE.Vector3, shaft?: THREE.Vector3) {
+    const arm = this.racquetArm;
+    solveTwoBone(arm, this.seg.upper, this.seg.fore, target, pole);
     // Shoulders follow the hand: back on the backswing, through on the follow-through.
-    this.handLocal.copy(this.root.worldToLocal(this.handWorld()));
-    this.twistTarget = THREE.MathUtils.clamp(0.9 * (this.handLocal.z - 0.2) + 0.6 * (this.handLocal.x + 0.3), -0.9, 0.8);
+    arm.end.updateWorldMatrix(true, false);
+    this.handLocal.copy(this.root.worldToLocal(arm.end.localToWorld(tmp.a.copy(this.grip))));
+    this.twistTarget = THREE.MathUtils.clamp(0.9 * (this.handLocal.z - 0.2) + 0.6 * (this.handLocal.x + 0.3) + this.coil, -1.1, 1.0);
+    if (shaft) this.rollForearm(shaft);
+    this.retarget();
+    if (shaft) this.turnWrist(shaft);
   }
 
-  /** Where the racquet hand actually ended up (after `reach`). */
+  /** Roll the forearm about its length so the thumb side of the hand turns toward the racquet. */
+  private rollForearm(shaft: THREE.Vector3) {
+    const lower = this.racquetArm.lower;
+    const lowerQ = lower.getWorldQuaternion(new THREE.Quaternion());
+    const axis = DOWN.clone().applyQuaternion(lowerQ);
+    const thumb = this.hand.thumb.clone().applyQuaternion(lowerQ);
+    const want = shaft.clone().addScaledVector(axis, -shaft.dot(axis));
+    if (want.lengthSq() < 1e-4) return;
+    want.normalize();
+    const angle = Math.atan2(axis.dot(tmp.b.crossVectors(thumb, want)), thumb.dot(want));
+    lowerQ.premultiply(tmp.q.setFromAxisAngle(axis, angle * FOREARM_ROLL));
+    const parentQ = lower.parent!.getWorldQuaternion(tmp.q2);
+    lower.quaternion.copy(parentQ.invert().multiply(lowerQ));
+  }
+
+  /** Turn the hand so the handle runs through the fist along the racquet. */
+  private turnWrist(shaft: THREE.Vector3) {
+    const { palm, rest, down, thumb } = this.hand;
+    const forearm = DOWN.clone().applyQuaternion(this.racquetArm.lower.getWorldQuaternion(tmp.q));
+    const s = shaft.clone().normalize();
+    const d = forearm.addScaledVector(s, -forearm.dot(s));
+    if (d.lengthSq() < 1e-4) return;
+    d.normalize();
+    // Rotation taking the rest frame (down, thumb) to the wanted one (d, s).
+    const from = new THREE.Matrix4().makeBasis(down, thumb, tmp.a.crossVectors(down, thumb));
+    const to = new THREE.Matrix4().makeBasis(d, s, tmp.b.crossVectors(d, s));
+    const q = new THREE.Quaternion().setFromRotationMatrix(to.multiply(from.transpose()));
+    palm.parent!.updateWorldMatrix(true, false);
+    setWorldQuaternion(palm, q.multiply(rest));
+  }
+
+  /** Where the racquet grip actually ended up (after `reach`). */
   handWorld(out = new THREE.Vector3()) {
-    this.racquetArm.end.updateWorldMatrix(true, false);
-    return this.racquetArm.end.localToWorld(out.set(0, -0.05, 0));
+    this.hand.palm.updateWorldMatrix(true, false);
+    return this.hand.palm.localToWorld(out.copy(this.hand.grip));
   }
 
+  /** A point just above the head (world), for markers. */
   headWorld(out = new THREE.Vector3()) {
     this.root.updateMatrixWorld(true);
-    return this.head.localToWorld(out.set(0, 0.32, 0));
+    return this.head.localToWorld(out.copy(this.headTop).add(tmp.a.set(0, 0.12, 0)));
   }
 
   /** Model-space direction → world, for poles and swing paths. */

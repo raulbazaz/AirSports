@@ -7,6 +7,8 @@ import { stringsTexture } from "./textures";
 
 const SCALE = 1.45; // oversized so it reads from the camera
 const HEAD = { cy: 0.42, rx: 0.13, ry: 0.165 };
+/** Grip to the middle of the string bed, in meters (as rendered). */
+export const RACQUET_HEAD = HEAD.cy * SCALE;
 
 let strings: THREE.Texture | null = null;
 

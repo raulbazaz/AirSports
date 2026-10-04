@@ -29,6 +29,13 @@ export function requestSensorPermission(): Promise<boolean> {
 
 export type Tilt = { alpha: number; beta: number; gamma: number; t: number };
 
+/** Orientation events received and tilts sent, for the game's debug overlay. */
+export const tiltCounts = { sensor: 0, sent: 0 };
+
+type Angles = { alpha: number; beta: number; gamma: number };
+/** Latest orientation, unthrottled (a swing reports the one at its peak). */
+let orientation: Angles = { alpha: 0, beta: 90, gamma: 0 };
+
 /** Streams throttled tilt readings. Returns a stop function. */
 export function startTilt(onTilt: (tilt: Tilt) => void, onNoData: () => void): () => void {
   let lastSent = 0;
@@ -37,9 +44,12 @@ export function startTilt(onTilt: (tilt: Tilt) => void, onNoData: () => void): (
   const handler = (e: DeviceOrientationEvent) => {
     if (e.beta === null || e.gamma === null) return;
     gotData = true;
+    tiltCounts.sensor++;
+    orientation = { alpha: e.alpha ?? 0, beta: e.beta, gamma: e.gamma };
     const now = performance.now();
     if (now - lastSent < TILT_INTERVAL_MS) return;
     lastSent = now;
+    tiltCounts.sent++;
     onTilt({ alpha: e.alpha ?? 0, beta: e.beta, gamma: e.gamma, t: Date.now() });
   };
 
@@ -56,16 +66,30 @@ export function startTilt(onTilt: (tilt: Tilt) => void, onNoData: () => void): (
 const SWING_ACCEL = 14; // m/s², gravity removed
 const SWING_ROTATION = 350; // deg/s
 const SWING_COOLDOWN_MS = 450;
+/** After the threshold, keep watching this long for the swing's peak (the moment of contact). */
+const PEAK_WINDOW_MS = 70;
 const GRAVITY = 9.81;
 
-/** Calls `onSwing(power 0..1)` once per swing. Returns a stop function. */
-export function startSwingDetector(onSwing: (power: number) => void): () => void {
-  let lastSwing = 0;
+export interface Swing {
+  /** 0..1 from the peak strength. */
+  power: number;
+  /** Phone clock (Date.now) at the peak. */
+  t: number;
+  /** Rotation rate at the peak (deg/s): the racquet head's path. */
+  rate: Angles;
+  /** Orientation at the peak: the racquet face at contact. */
+  orient: Angles;
+}
+
+/**
+ * Calls `onSwing` once per swing, with the readings at its peak. The game rewinds to the peak's
+ * timestamp, so waiting for the peak doesn't make hits late. Returns a stop function.
+ */
+export function startSwingDetector(onSwing: (swing: Swing) => void): () => void {
+  let lastSwing = -Infinity;
+  let peak: { strength: number; swing: Swing } | null = null;
 
   const handler = (e: DeviceMotionEvent) => {
-    const now = performance.now();
-    if (now - lastSwing < SWING_COOLDOWN_MS) return;
-
     let accel = 0;
     const a = e.acceleration;
     const ag = e.accelerationIncludingGravity;
@@ -75,13 +99,22 @@ export function startSwingDetector(onSwing: (power: number) => void): () => void
       accel = Math.abs(Math.hypot(ag.x, ag.y, ag.z) - GRAVITY); // older devices lack gravity-free data
     }
     const r = e.rotationRate;
-    const rotation = r ? Math.hypot(r.alpha ?? 0, r.beta ?? 0, r.gamma ?? 0) : 0;
+    const rate = { alpha: r?.alpha ?? 0, beta: r?.beta ?? 0, gamma: r?.gamma ?? 0 };
+    const strength = Math.max(accel / SWING_ACCEL, Math.hypot(rate.alpha, rate.beta, rate.gamma) / SWING_ROTATION);
 
-    // Fire on the threshold crossing rather than the peak: timing matters more than exact power.
-    const strength = Math.max(accel / SWING_ACCEL, rotation / SWING_ROTATION);
-    if (strength < 1) return;
+    if (peak) {
+      if (strength > peak.strength) peak = { strength, swing: { ...peak.swing, t: Date.now(), rate, orient: orientation } };
+      return;
+    }
+    const now = performance.now();
+    if (strength < 1 || now - lastSwing < SWING_COOLDOWN_MS) return;
     lastSwing = now;
-    onSwing(Math.min(1, 0.35 + (strength - 1) / 3));
+    peak = { strength, swing: { power: 0, t: Date.now(), rate, orient: orientation } };
+    setTimeout(() => {
+      const { strength: s, swing } = peak!;
+      peak = null;
+      onSwing({ ...swing, power: Math.min(1, 0.35 + (s - 1) / 3) });
+    }, PEAK_WINDOW_MS);
   };
 
   window.addEventListener("devicemotion", handler);

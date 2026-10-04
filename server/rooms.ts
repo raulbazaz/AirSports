@@ -32,6 +32,8 @@ interface Room {
   hostSocketId: string | null;
   hostGraceTimer?: NodeJS.Timeout;
   seats: Map<PlayerSlot, PlayerSeat>;
+  /** Tilts received from phones since the host's last net:ping (debug overlay). */
+  tiltsIn: number;
 }
 
 export class RoomManager {
@@ -51,6 +53,7 @@ export class RoomManager {
         hostToken: randomUUID(),
         hostSocketId: socket.id,
         seats: new Map(),
+        tiltsIn: 0,
       };
       this.rooms.set(room.code, room);
       socket.data = { role: "host", code: room.code };
@@ -109,9 +112,16 @@ export class RoomManager {
       if (role !== "controller" || !code || !slot) return;
       const room = this.rooms.get(code);
       if (!room?.hostSocketId) return;
+      if (input.type === "tilt") room.tiltsIn++;
       const host = this.io.to(room.hostSocketId);
       // Tilt is a stream: drop stale frames rather than queue them. Everything else must arrive.
       (input.type === "tilt" ? host.volatile : host).emit("player:input", { slot, input });
+    });
+
+    socket.on("net:ping", (ack) => {
+      const room = this.hostRoom(socket);
+      ack({ tiltsIn: room?.tiltsIn ?? 0 });
+      if (room) room.tiltsIn = 0;
     });
 
     socket.on("disconnect", () => this.leaveCurrent(socket));

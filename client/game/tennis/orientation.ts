@@ -49,3 +49,44 @@ export function toCourt(v: V3, heading: number): V3 {
   const s = Math.sin(heading);
   return { x: v.x * c - v.y * s, y: v.z, z: v.x * s + v.y * c };
 }
+
+/** Hand to the strings' sweet spot (m): turns the phone's spin rate into racquet head speed. */
+const SWEET_SPOT = 0.55;
+
+export interface RacquetMotion {
+  /** Racquet head velocity in court space (m/s), from the phone's rotation alone. */
+  head: V3;
+  /** Rotation rate in court space (rad/s). */
+  omega: V3;
+  /** String-face normal in court space, on the side facing the far end. */
+  face: V3;
+}
+
+/**
+ * The racquet at the peak of a swing, from the phone's orientation and gyro there.
+ * DeviceMotionEvent.rotationRate gives alpha about the screen normal (z), beta about the screen's
+ * right edge (x) and gamma about its top edge (y), in deg/s; the racquet head sits along the top.
+ */
+export function racquetMotion(
+  orient: { alpha: number; beta: number; gamma: number },
+  rate: { alpha: number; beta: number; gamma: number },
+  heading: number,
+): RacquetMotion {
+  const a = phoneAxes(orient.alpha, orient.beta, orient.gamma);
+  const earth = {
+    x: rad(rate.beta) * a.right.x + rad(rate.gamma) * a.top.x + rad(rate.alpha) * a.out.x,
+    y: rad(rate.beta) * a.right.y + rad(rate.gamma) * a.top.y + rad(rate.alpha) * a.out.y,
+    z: rad(rate.beta) * a.right.z + rad(rate.gamma) * a.top.z + rad(rate.alpha) * a.out.z,
+  };
+  const omega = toCourt(earth, heading);
+  const shaft = toCourt(a.top, heading);
+  const out = toCourt(a.out, heading);
+  const face = out.z >= 0 ? out : { x: -out.x, y: -out.y, z: -out.z };
+  // ω × (shaft · L)
+  const head = {
+    x: (omega.y * shaft.z - omega.z * shaft.y) * SWEET_SPOT,
+    y: (omega.z * shaft.x - omega.x * shaft.z) * SWEET_SPOT,
+    z: (omega.x * shaft.y - omega.y * shaft.x) * SWEET_SPOT,
+  };
+  return { head, omega, face };
+}
