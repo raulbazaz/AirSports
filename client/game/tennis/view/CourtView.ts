@@ -1,9 +1,10 @@
 import * as THREE from "three";
 import { COURT } from "../court";
 import { Match, type Shot, type Side, type Stroke } from "../match";
-import { buildArena } from "./arena";
+import { buildArena, CROWD_PALETTE, simpleCrowd } from "./arena";
 import { type AthleteAsset, AthleteModel, CPU_LOOK, PLAYER_LOOK } from "./athlete";
 import { CourtAudio } from "./audio";
+import { Crowd, type SpectatorAsset, weakDevice } from "./crowd";
 import { DebugOverlay } from "./debug";
 import { Hud } from "./hud";
 import { PostFX } from "./post";
@@ -64,6 +65,7 @@ export class CourtView {
   private readonly ballHolder = new THREE.Group();
   private squash = { amount: 0, age: 1, axis: new THREE.Vector3(0, 1, 0) };
   readonly audio: CourtAudio;
+  private readonly crowd: Crowd | null = null;
   private readonly sides: Record<Side, Racket>;
   /** Hit-stop time left (s), and the camera's impact kick (decays to 0). */
   private hitStop = 0;
@@ -89,7 +91,7 @@ export class CourtView {
   constructor(
     private readonly parent: HTMLElement,
     private readonly hooks: CourtHooks,
-    athlete: AthleteAsset,
+    { athlete, spectator }: { athlete: AthleteAsset; spectator: SpectatorAsset | null },
     audio?: AudioContext,
   ) {
     this.player = new AthleteModel(athlete, PLAYER_LOOK, Math.PI);
@@ -125,7 +127,13 @@ export class CourtView {
     sun.position.copy(w(-6, 20, -8));
     this.scene.add(sun);
 
-    buildArena(this.scene);
+    const seats = buildArena(this.scene);
+    if (spectator) {
+      this.crowd = new Crowd(spectator, seats, CROWD_PALETTE, w(0, 1, COURT.netZ), weakDevice());
+      this.scene.add(this.crowd.mesh);
+    } else {
+      this.scene.add(simpleCrowd(seats));
+    }
     this.scene.add(this.player.root, this.cpu.root, this.playerRacquet, this.cpuRacquet);
 
     const blob = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
@@ -164,7 +172,11 @@ export class CourtView {
         this.squashBall(SQUASH.bounce * Math.min(1, speed / 14), UP);
       },
       net: (cord) => this.audio.net(cord, this.match.ball.pos.x),
-      point: (winner) => this.audio.crowd(winner === "player" ? Math.min(1, 0.55 + this.match.rally * 0.06) : 0.2),
+      point: (winner) => {
+        const cheer = winner === "player" ? Math.min(1, 0.55 + this.match.rally * 0.06) : 0.2;
+        this.audio.crowd(cheer);
+        this.crowd?.cheer(cheer);
+      },
       ballVisible: (v) => {
         this.ballHolder.visible = v;
         this.trailPos.length = 0;
@@ -191,6 +203,7 @@ export class CourtView {
     this.resize.disconnect();
     this.hud.destroy();
     this.debug.destroy();
+    this.crowd?.dispose();
     this.scene.traverse((o) => {
       if (o instanceof THREE.Mesh || o instanceof THREE.Sprite) {
         o.geometry.dispose();
@@ -251,7 +264,10 @@ export class CourtView {
     }
   };
 
-  /** Weak GPU? Render fewer pixels: count slow frames over ~2 s windows and step down. */
+  /**
+   * Weak GPU? Count slow frames over ~2 s windows and step down: first a lighter crowd, then
+   * fewer pixels, then no post effects.
+   */
   private adaptResolution(frameS: number) {
     if (document.hidden || frameS > 0.25) return; // tab switches and hitches don't count
     this.sampledFrames++;
@@ -261,7 +277,9 @@ export class CourtView {
     if (this.slowFrames > 20) {
       // Way too slow (under ~24 fps): go straight to the lowest resolution instead of stepping.
       const crawling = this.sampledTime / this.sampledFrames > 1 / 24;
-      if (this.pixelRatio > PIXEL_RATIO.min) {
+      if (this.crowd?.degrade()) {
+        if (crawling) while (this.crowd.degrade());
+      } else if (this.pixelRatio > PIXEL_RATIO.min) {
         this.pixelRatio = crawling ? PIXEL_RATIO.min : Math.max(PIXEL_RATIO.min, this.pixelRatio - PIXEL_RATIO.step);
         this.fit();
       } else {
@@ -290,6 +308,7 @@ export class CourtView {
     this.syncRacquet("player");
     this.syncRacquet("cpu");
     this.syncBall(dt);
+    this.crowd?.update(realDt, this.time, this.ballHolder.visible ? this.ballHolder.position : null);
     this.syncShadows();
     this.syncCamera(realDt);
     this.syncFlashes(realDt);

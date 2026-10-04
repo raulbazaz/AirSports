@@ -2,18 +2,22 @@ import * as THREE from "three";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { NET_POST_X, netTop } from "../ball";
 import { COURT } from "../court";
+import type { Palette, Seat } from "./crowd";
 import { w } from "./space";
 import { GROUND, groundTexture, netTexture, outerGrassTexture, wallTextTexture } from "./textures";
 
-// The venue: a mowed grass court boxed in by padded green walls, small stands with spectators
-// down both sides, hedges and trees beyond. Built for weak GPUs: everything static is merged
+// The venue: a mowed grass court boxed in by padded green walls, small stands down both sides
+// (their seats are returned for the crowd, see crowd.ts), hedges and trees beyond. Built for weak GPUs: everything static is merged
 // into a handful of meshes (one per material) with cheap Lambert shading.
 
 const L = COURT.length;
 const WALL = { h: 1.15, t: 0.35, green: 0x2c6a37, pad: 0x3b8645 };
-const SKINS = [0xf6d3b3, 0xe8b996, 0xc98e66, 0xa8694a, 0x6b4430];
-const HAIRS = [0x2b1d16, 0x5a3820, 0x7a4a26, 0x1a1a1a, 0xc8a060, 0x8a8a8a];
-const SHIRTS = [0xe5532d, 0x2f7de1, 0xffd23f, 0xffffff, 0x8c5bd6, 0x3cb371, 0xff8fb0, 0x43c6d8, 0x2b2f36];
+export const CROWD_PALETTE: Palette = {
+  skins: [0xf6d3b3, 0xe8b996, 0xc98e66, 0xa8694a, 0x6b4430],
+  hairs: [0x2b1d16, 0x5a3820, 0x7a4a26, 0x1a1a1a, 0xc8a060, 0x8a8a8a],
+  shirts: [0xe5532d, 0x2f7de1, 0xffd23f, 0xffffff, 0x8c5bd6, 0x3cb371, 0xff8fb0, 0x43c6d8, 0x2b2f36],
+  trousers: [0x2b3a55, 0x3d5a80, 0xc8b28a, 0x2b2f36, 0xf2f2f2, 0x5a4a3a],
+};
 
 /** Collects coloured geometry and merges it into one vertex-coloured mesh. */
 class Batch {
@@ -88,10 +92,10 @@ function walls(batch: Batch, scene: THREE.Scene) {
   }
 }
 
-/** Three tiers of seats down each side, filled with round-headed spectators. */
-function stands(batch: Batch, crowd: Batch) {
+/** Three tiers of seats down each side; returns where spectators sit, facing the court. */
+function stands(batch: Batch) {
   const rand = rng(5);
-  const pick = <T,>(a: T[]) => a[Math.floor(rand() * a.length)];
+  const seats: Seat[] = [];
   const tiers = 3;
   const depth = 1.1;
   const rise = 0.5;
@@ -110,7 +114,9 @@ function stands(batch: Batch, crowd: Batch) {
       batch.add(box(0.1, 0.32, len), 0x2f7de1, w(x + side * (depth / 2 - 0.05), top + 0.16, zMid));
       for (let z = zA; z <= zB; z += 0.62) {
         if (rand() > 0.8) continue;
-        spectator(crowd, x + side * 0.12 + (rand() - 0.5) * 0.08, top, z + (rand() - 0.5) * 0.12, pick);
+        // Hips just behind the middle of the tier, so the knees reach its front edge.
+        const pos = w(x - side * 0.1 + (rand() - 0.5) * 0.05, top, z + (rand() - 0.5) * 0.12);
+        seats.push({ pos, yaw: (-side * Math.PI) / 2 });
       }
     }
     // Green end walls closing off each stand.
@@ -118,13 +124,24 @@ function stands(batch: Batch, crowd: Batch) {
     const hEnd = 0.55 + rise * tiers + 0.4;
     for (const z of [zA - 1.5, zB + 1.5]) batch.add(box(outer, hEnd, 0.25), WALL.green, w(inner + (side * outer) / 2, hEnd / 2, z));
   }
+  return seats;
 }
 
-function spectator(crowd: Batch, x: number, seatY: number, z: number, pick: <T>(a: T[]) => T) {
-  crowd.add(new THREE.CylinderGeometry(0.14, 0.19, 0.42, 7), pick(SHIRTS), w(x, seatY + 0.21, z));
-  crowd.add(new THREE.SphereGeometry(0.17, 8, 6), pick(SKINS), w(x, seatY + 0.6, z));
-  const hair = new THREE.SphereGeometry(0.18, 8, 3, 0, Math.PI * 2, 0, Math.PI * 0.45);
-  crowd.add(hair, pick(HAIRS), w(x, seatY + 0.63, z));
+/** Stand-in spectators (a body and a round head each), if the crowd model can't be loaded. */
+export function simpleCrowd(seats: Seat[]) {
+  const crowd = new Batch();
+  const rand = rng(5);
+  const pick = (a: number[]) => a[Math.floor(rand() * a.length)];
+  const { skins, hairs, shirts } = CROWD_PALETTE;
+  for (const { pos, yaw } of seats) {
+    // Sit toward the back of the tier, in the seat.
+    const at = pos.clone().add(new THREE.Vector3(-Math.sin(yaw) * 0.22, 0, 0));
+    crowd.add(new THREE.CylinderGeometry(0.14, 0.19, 0.42, 7), pick(shirts), at.clone().setY(at.y + 0.21));
+    crowd.add(new THREE.SphereGeometry(0.17, 8, 6), pick(skins), at.clone().setY(at.y + 0.6));
+    const hair = new THREE.SphereGeometry(0.18, 8, 3, 0, Math.PI * 2, 0, Math.PI * 0.45);
+    crowd.add(hair, pick(hairs), at.clone().setY(at.y + 0.63));
+  }
+  return crowd.build();
 }
 
 /** Hedge and round trees behind the far wall and around the outside. */
@@ -187,16 +204,17 @@ function umpireChair(batch: Batch) {
   batch.add(box(0.08, 0.6, 0.8), WALL.green, w(x - 0.36, 2.15, z));
 }
 
+/** Builds the venue; returns the stands' seats for the crowd. */
 export function buildArena(scene: THREE.Scene) {
   ground(scene);
   const solid = new Batch();
-  const crowd = new Batch();
   walls(solid, scene);
-  stands(solid, crowd);
+  const seats = stands(solid);
   greenery(solid);
   net(scene, solid);
   umpireChair(solid);
-  scene.add(solid.build(), crowd.build());
+  scene.add(solid.build());
+  return seats;
 }
 
 function rng(seed: number) {

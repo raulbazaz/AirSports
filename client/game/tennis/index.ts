@@ -1,6 +1,7 @@
 import type { ControllerInput } from "../../../shared/protocol";
 import type { DebugOverlay } from "./view/debug";
 import { loadAthlete } from "./view/athlete";
+import { loadSpectator } from "./view/crowd";
 import { type CourtHooks, CourtView } from "./view/CourtView";
 
 export type { CourtHooks };
@@ -28,9 +29,10 @@ export async function startTennis(parent: HTMLElement, hooks: CourtHooks, audio?
       document.fonts.load(f).catch(() => undefined),
     ),
   );
-  const [athlete] = await Promise.all([loadAthlete(), fonts]);
+  // The crowd is optional: without its model the stands get simple stand-ins.
+  const [athlete, spectator] = await Promise.all([loadAthlete(), loadSpectator().catch(() => null), fonts]);
 
-  const view = new CourtView(parent, hooks, athlete, audio);
+  const view = new CourtView(parent, hooks, { athlete, spectator }, audio);
   const match = view.match;
 
   // Lets the browser tests inspect the rally. Stripped from production builds.

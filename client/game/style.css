@@ -12,6 +12,14 @@
   --yellow: #ffe94a;
   --tag: rgba(46, 50, 56, 0.82);
   --font: "Fredoka", system-ui, -apple-system, "Segoe UI", sans-serif;
+  /* Broadcast scoreboard look, shared by the in-game HUD and the lobby's tags and buttons. */
+  --board-font: "Barlow Semi Condensed", "Arial Narrow", sans-serif;
+  --board-bg: rgba(14, 22, 26, 0.92);
+  --board-cell: #1d2b31;
+  --board-line: rgba(255, 255, 255, 0.08);
+  --board-green: #27d07a;
+  --board-dim: #8fa0a8;
+  --board-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
 }
 
 * {
@@ -236,35 +244,61 @@ body {
     idle 2.4s ease-in-out 0.7s infinite;
 }
 
+/* Name tags in the scoreboard style: dark panel, avatar, name, and a status cell that turns
+   green when the side is ready. */
 .tag {
   display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 4px 18px 4px 4px;
-  border-radius: 12px;
-  background: var(--tag);
+  align-items: stretch;
+  border-radius: 7px;
+  overflow: hidden;
+  background: var(--board-bg);
+  box-shadow: var(--board-shadow);
   color: #fff;
-  font-weight: 600;
-  font-size: 1.15rem;
-  opacity: 0.55;
-  transition: opacity 0.3s;
+  font-family: var(--board-font);
+  font-size: 1.35rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  white-space: nowrap;
 }
 
-.side.ready .tag {
-  opacity: 1;
+.tag-name {
+  align-self: center;
+  padding: 0 18px 0 10px;
+}
+
+.tag::after {
+  content: "Waiting";
+  display: grid;
+  place-items: center;
+  padding: 0 14px;
+  background: var(--board-cell);
+  color: var(--board-dim);
+  font-size: 1rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  transition: background 0.3s, color 0.3s;
+}
+
+.side.ready .tag::after {
+  content: "Ready";
+  background: var(--board-green);
+  color: #0e161a;
 }
 
 .face {
-  width: 40px;
-  height: 40px;
-  border-radius: 50%;
+  align-self: center;
+  width: 36px;
+  height: 36px;
+  margin: 5px 0 5px 6px;
+  border-radius: 4px;
   overflow: hidden;
-  border: 3px solid var(--accent);
-  background: rgba(255, 255, 255, 0.25);
+  box-shadow: inset 0 -4px 0 var(--accent), 0 0 0 1px rgba(255, 255, 255, 0.15);
+  background: rgba(255, 255, 255, 0.12);
 }
 
 #cpu-side .face {
-  border-color: #f08a24;
+  box-shadow: inset 0 -4px 0 #f08a24, 0 0 0 1px rgba(255, 255, 255, 0.15);
 }
 
 .face svg {
@@ -278,6 +312,11 @@ body {
   font-weight: 600;
   color: #fff;
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+}
+
+/* Once a side is ready its tag says so; keep the line's space so nothing jumps. */
+.side.ready .side-status {
+  visibility: hidden;
 }
 
 .joined-pop {
@@ -304,35 +343,67 @@ body {
   gap: 10px;
 }
 
+/* Start: a scoreboard panel with a green "go" cell. */
 .start-btn {
-  font-family: var(--font);
-  font-size: 1.8rem;
-  font-weight: 700;
-  padding: 10px 64px;
-  border-radius: 16px;
-  border: 4px solid var(--ink);
-  background: var(--yellow);
-  color: var(--ink);
+  display: flex;
+  align-items: stretch;
+  padding: 0;
+  border: 0;
+  border-radius: 9px;
+  overflow: hidden;
+  background: var(--board-bg);
+  box-shadow: var(--board-shadow);
+  color: #fff;
+  font-family: var(--board-font);
+  font-size: 2.1rem;
+  font-style: italic;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
   cursor: pointer;
-  box-shadow: 0 6px 0 var(--ink);
-  transition: transform 0.1s, box-shadow 0.1s;
+  transition: transform 0.1s, box-shadow 0.1s, filter 0.15s;
+}
+
+.start-btn .label {
+  padding: 8px 40px 8px 44px;
+}
+
+.start-btn .go {
+  display: grid;
+  place-items: center;
+  width: 64px;
+  background: var(--board-green);
+  color: #0e161a;
+  font-size: 1.5rem;
+  font-style: normal;
 }
 
 .start-btn:not(:disabled) {
   animation: nudge 1.6s ease-in-out infinite;
 }
 
+.start-btn:hover:not(:disabled) {
+  filter: brightness(1.15);
+}
+
+.start-btn:focus-visible {
+  outline: 3px solid var(--board-green);
+  outline-offset: 3px;
+}
+
 .start-btn:active:not(:disabled) {
-  transform: translateY(4px);
-  box-shadow: 0 2px 0 var(--ink);
+  transform: translateY(2px);
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.35);
 }
 
 .start-btn:disabled {
-  background: #e8e8e8;
-  color: #9aa0a8;
-  border-color: #b9bec5;
-  box-shadow: 0 6px 0 #b9bec5;
+  color: var(--board-dim);
   cursor: not-allowed;
+}
+
+.start-btn:disabled .go {
+  background: var(--board-cell);
+  color: var(--board-dim);
 }
 
 .status {
@@ -363,13 +434,6 @@ body {
   --hud-font: "Fredoka", "Arial Rounded MT Bold", system-ui, sans-serif;
   --hud-u: clamp(10px, 1.1vw, 18px);
   --hud-ink: #3a3f47;
-  --board-font: "Barlow Semi Condensed", "Arial Narrow", sans-serif;
-  --board-bg: rgba(14, 22, 26, 0.92);
-  --board-cell: #1d2b31;
-  --board-line: rgba(255, 255, 255, 0.08);
-  --board-green: #27d07a;
-  --board-dim: #8fa0a8;
-  --board-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
   position: absolute;
   inset: 0;
   pointer-events: none;
@@ -801,15 +865,50 @@ body {
   }
 }
 
-/* Small screens: stack the arena. */
+/* Small screens (tablets and phones upright): stack the arena, shrink the tags, and let the
+   lobby scroll if it still doesn't fit. */
 @media (max-width: 760px) {
+  .lobby {
+    overflow-y: auto;
+    gap: 18px;
+  }
+  /* The backdrop stays put while the lobby scrolls. */
+  .sky,
+  .grass {
+    position: fixed;
+  }
   .arena {
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    row-gap: 20px;
   }
   .join-card {
     grid-column: 1 / -1;
     grid-row: 1;
     justify-self: center;
+    max-width: 100%;
+  }
+  .url {
+    overflow-wrap: anywhere;
+  }
+  .figure {
+    width: clamp(90px, 26vw, 130px);
+  }
+  .tag {
+    font-size: 1rem;
+  }
+  .tag-name {
+    padding: 0 10px 0 7px;
+  }
+  .tag::after {
+    padding: 0 8px;
+    font-size: 0.8rem;
+  }
+  .face {
+    width: 28px;
+    height: 28px;
+  }
+  .start-btn {
+    font-size: 1.7rem;
   }
 }
 
