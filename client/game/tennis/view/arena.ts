@@ -4,7 +4,7 @@ import { NET_POST_X, netTop } from "../ball";
 import { COURT } from "../court";
 import type { Palette, Seat } from "./crowd";
 import { w } from "./space";
-import { GROUND, groundTexture, netTexture, outerGrassTexture, wallTextTexture } from "./textures";
+import { GROUND, groundTexture, netTexture, outerGrassTexture } from "./textures";
 
 // The venue: a mowed grass court boxed in by padded green walls, small stands down both sides
 // (their seats are returned for the crowd, see crowd.ts), hedges and trees beyond. Built for weak GPUs: everything static is merged
@@ -82,13 +82,27 @@ function walls(batch: Batch, scene: THREE.Scene) {
     batch.add(pad, WALL.pad, w((ax + bx) / 2, h, (az + bz) / 2));
   }
 
-  // Name painted on the far wall, facing the camera.
-  const text = new THREE.MeshBasicMaterial({ map: wallTextTexture("AirSports"), transparent: true, depthWrite: false });
-  const plate = new THREE.PlaneGeometry(4.4, 0.82);
-  for (const x of [-6, 0, 6]) {
+  // The AirSports logo along every wall, like the sponsor boards at a real match. Each faces the
+  // court, so both players see it at the far end and down the sides.
+  const logo = new THREE.TextureLoader().load("/brand/logo-wide.png");
+  logo.colorSpace = THREE.SRGBColorSpace;
+  logo.anisotropy = 4;
+  const text = new THREE.MeshBasicMaterial({ map: logo, transparent: true, depthWrite: false });
+  const ph = h * 0.74;
+  const plate = new THREE.PlaneGeometry(ph * (789 / 200), ph);
+  const place = (x: number, z: number, turn: number) => {
     const m = new THREE.Mesh(plate, text);
-    m.position.copy(w(x, h * 0.46, GROUND.z1 - 0.01));
+    m.position.copy(w(x, h * 0.5, z));
+    m.rotation.y = turn;
     scene.add(m);
+  };
+  for (const x of [-6, 0, 6]) {
+    place(x, z1 - 0.01, 0);
+    place(-x, z0 + 0.01, Math.PI);
+  }
+  for (const dz of [-8, 0, 8]) {
+    place(x0 + 0.01, L / 2 + dz, Math.PI / 2);
+    place(x1 - 0.01, L / 2 - dz, -Math.PI / 2);
   }
 }
 

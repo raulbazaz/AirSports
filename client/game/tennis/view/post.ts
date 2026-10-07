@@ -81,6 +81,25 @@ export interface PostSettings {
 
 export const DEFAULT_POST: PostSettings = { soft: 0.28, depthSoft: 0.5, bloom: 0.7 };
 
+/** A rectangle of the canvas in CSS pixels, measured from the bottom left. */
+export interface Pane {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/** Run `draw` with the renderer confined to `pane` of the canvas. */
+export function drawIn(r: THREE.WebGLRenderer, pane: Pane, draw: () => void) {
+  r.setViewport(pane.x, pane.y, pane.width, pane.height);
+  r.setScissor(pane.x, pane.y, pane.width, pane.height);
+  r.setScissorTest(true);
+  draw();
+  r.setScissorTest(false);
+  const size = r.getSize(new THREE.Vector2());
+  r.setViewport(0, 0, size.x, size.y);
+}
+
 export class PostFX {
   private readonly scene: THREE.WebGLRenderTarget;
   private readonly small: THREE.WebGLRenderTarget;
@@ -119,7 +138,7 @@ export class PostFX {
     this.quadScene.add(this.quad);
   }
 
-  /** Size in device pixels (the canvas drawing buffer). */
+  /** Size in device pixels: the canvas drawing buffer, or one pane of it when split. */
   setSize(width: number, height: number) {
     this.scene.setSize(width, height);
     const sw = Math.max(1, Math.round(width / 4));
@@ -129,7 +148,8 @@ export class PostFX {
     this.down.uniforms.uTexel.value.set(1 / width, 1 / height);
   }
 
-  render(scene: THREE.Scene, camera: THREE.Camera) {
+  /** `pane`: where on the canvas to draw (CSS pixels from the bottom left, as `setViewport`); all of it by default. */
+  render(scene: THREE.Scene, camera: THREE.Camera, pane?: Pane) {
     const r = this.renderer;
     r.setRenderTarget(this.scene);
     r.render(scene, camera);
@@ -141,7 +161,8 @@ export class PostFX {
 
     this.quad.material = this.composite;
     r.setRenderTarget(null);
-    r.render(this.quadScene, this.quadCam);
+    if (!pane) return r.render(this.quadScene, this.quadCam);
+    drawIn(r, pane, () => r.render(this.quadScene, this.quadCam));
   }
 
   private pass(material: THREE.ShaderMaterial, uniforms: Record<string, unknown>, target: THREE.WebGLRenderTarget) {

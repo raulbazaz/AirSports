@@ -19,6 +19,18 @@ export const PLAYER_LOOK: Look = {
   hairStyle: "short",
 };
 
+export const PLAYER2_LOOK: Look = {
+  skin: "#d9a27a",
+  hair: "#2b1d14",
+  shirt: "#9b5de5",
+  shorts: "#ffffff",
+  racquet: "#9b5de5",
+  hairStyle: "short",
+};
+
+/** The look for a phone in `slot` (1 or 2). */
+export const lookForSlot = (slot: number) => (slot === 2 ? PLAYER2_LOOK : PLAYER_LOOK);
+
 export const CPU_LOOK: Look = {
   skin: "#a8694a",
   hair: "#2b1d16",

@@ -1,5 +1,5 @@
 import type { HostMessage, JoinError } from "../../shared/protocol";
-import { characterSvg, PLAYER_LOOK } from "../characters";
+import { lookForSlot } from "../characters";
 import { racquetAngle } from "../racquet";
 import { connectSocket } from "../net";
 import { keepAwake, requestSensorPermission, startSwingDetector, startTilt, tiltCounts } from "./sensors";
@@ -15,7 +15,7 @@ const hintEl = $("#hint");
 
 const JOIN_ERRORS: Record<JoinError, string> = {
   ROOM_NOT_FOUND: "No game with that code. Check the code on the screen.",
-  ROOM_FULL: "Someone is already playing in this game.",
+  ROOM_FULL: "This game already has two players.",
 };
 
 const tokenKey = (code: string) => `airsports:player:${code}`;
@@ -40,7 +40,21 @@ const socket = connectSocket();
 let joinedCode: string | null = null;
 let stopTilt: (() => void) | null = null;
 
-$("#avatar").innerHTML = characterSvg(PLAYER_LOOK, "front");
+let shownSlot = 0;
+
+/** Dress the phone in its player's colours and athlete (Player 1 blue, Player 2 purple). */
+async function showSlot(slot: number) {
+  $("#slot").textContent = `Player ${slot}`;
+  document.documentElement.style.setProperty("--player", lookForSlot(slot).shirt);
+  if (slot === shownSlot) return;
+  shownSlot = slot;
+  // Three.js and the model load after the page, so joining is never held up by them.
+  const { athleteFigure } = await import("../figure3d");
+  const figure = await athleteFigure(slot === 2 ? "p2" : "p1");
+  if (shownSlot === slot) $("#avatar").replaceChildren(figure);
+}
+
+void showSlot(1);
 
 let angle = 0;
 
@@ -71,12 +85,14 @@ function startStreaming() {
 }
 
 function showGameState(state: Extract<HostMessage, { type: "state" }>["state"]) {
-  const playing = state !== "lobby";
+  const playing = state !== "lobby" && state !== "waiting";
   bounceBtn.hidden = !playing;
   connectedEl.classList.toggle("playing", playing);
   hintEl.textContent = playing
-    ? "Face the TV and hold your phone like a racquet handle, screen facing you. Tap Bounce, then swing!"
-    : "Press Start on the big screen to play.";
+    ? "Face the TV and hold your phone like a racquet handle, screen facing you. Tap Bounce when it's your serve, then swing!"
+    : state === "waiting"
+      ? "A match against the computer is on. You'll play in the next one."
+      : "Press Start on the big screen to play.";
 }
 
 bounceBtn.addEventListener("click", () => {
@@ -101,7 +117,7 @@ async function join(code: string) {
   storage(() => localStorage.setItem(tokenKey(res.code), res.playerToken));
   form.hidden = true;
   connectedEl.hidden = false;
-  $("#slot").textContent = `Player ${res.slot}`;
+  showSlot(res.slot);
   $("#room").textContent = res.code;
   setStatus("");
   history.replaceState(null, "", `/controller?room=${res.code}`);

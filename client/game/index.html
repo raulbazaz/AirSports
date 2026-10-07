@@ -3,7 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <link rel="icon" href="data:," />
+    <link rel="icon" type="image/png" href="/brand/favicon.png" />
+    <link rel="apple-touch-icon" href="/brand/apple-touch-icon.png" />
     <title>AirSports Tennis</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -16,24 +17,40 @@
       <div class="grass"></div>
 
       <header class="brand">
-        <h1>AirSports <span>Tennis</span></h1>
+        <h1><img class="brand-logo" src="/brand/logo-wide.png" alt="AirSports" /><span>Tennis</span></h1>
         <p>Your phone is the racquet</p>
       </header>
 
       <main class="arena">
-        <section class="side" id="player-side">
-          <div class="figure" id="player-figure">
-            <div class="silhouette"></div>
+        <!-- Player 1 and Player 2 side by side; with no second phone, the computer takes Player 2's place. -->
+        <section class="matchup">
+          <div class="pair">
+            <section class="side" id="player-side">
+              <div class="figure waiting" id="player-figure"></div>
+              <div class="tag">
+                <span class="face" id="player-face"></span>
+                <span class="tag-name">Player 1</span>
+              </div>
+            </section>
+
+            <div class="vs" aria-hidden="true">VS</div>
+
+            <section class="side" id="opponent-side">
+              <div class="figure waiting" id="opponent-figure"></div>
+              <div class="tag">
+                <span class="face" id="opponent-face"></span>
+                <span class="tag-name" id="opponent-name">Player 2</span>
+              </div>
+            </section>
           </div>
-          <div class="tag">
-            <span class="face" id="player-face"></span>
-            <span class="tag-name">Player 1</span>
-          </div>
-          <p class="side-status" id="player-status">Waiting for phone…</p>
+          <p class="fallback" id="fallback">
+            <span class="fallback-face" id="cpu-face"></span>
+            <span id="fallback-text">No Player 2? Your match will be against the <b>Computer</b>.</span>
+          </p>
         </section>
 
         <section class="join-card">
-          <p class="join-title">Scan to join</p>
+          <p class="join-title" id="join-title">Scan to join as <b class="p1">Player 1</b></p>
           <canvas id="qr" width="220" height="220" aria-label="QR code to join"></canvas>
           <div class="code-row">
             <span class="code-label">Room</span>
@@ -42,19 +59,17 @@
           <p id="join-url" class="url">connecting…</p>
           <p id="warning" class="warning" hidden></p>
         </section>
-
-        <section class="side ready" id="cpu-side">
-          <div class="figure" id="cpu-figure"></div>
-          <div class="tag">
-            <span class="face" id="cpu-face"></span>
-            <span class="tag-name">Computer</span>
-          </div>
-          <p class="side-status">Ready</p>
-        </section>
       </main>
 
       <footer class="footer">
-        <button id="start-btn" class="start-btn" disabled><span class="label">Start</span><span class="go" aria-hidden="true">▶</span></button>
+        <div class="start-row">
+          <!-- Which match Start will begin: lights up 2 Players once a second phone joins. -->
+          <div class="modes" aria-live="polite">
+            <span class="mode active" id="mode-1"><b>1 Player</b><small>vs Computer</small></span>
+            <span class="mode" id="mode-2"><b>2 Players</b><small>Split screen</small></span>
+          </div>
+          <button id="start-btn" class="start-btn" disabled><span class="label">Start</span><span class="go" aria-hidden="true">▶</span></button>
+        </div>
         <p id="status" class="status">Connecting to server…</p>
       </footer>
     </div>

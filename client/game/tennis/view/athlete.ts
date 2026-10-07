@@ -40,6 +40,15 @@ export const PLAYER_LOOK: Look = {
   shoes: 0xf2f2f2,
 };
 
+export const PLAYER2_LOOK: Look = {
+  skin: 0xd9a27a,
+  hair: 0x2b1d14,
+  shirt: 0x9b5de5,
+  shorts: 0xf4f4f4,
+  socks: 0xffffff,
+  shoes: 0x2b2440,
+};
+
 export const CPU_LOOK: Look = {
   skin: 0xa8694a,
   hair: 0x221812,

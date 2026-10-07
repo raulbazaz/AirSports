@@ -1,5 +1,6 @@
 // Heads-up display as plain DOM over the 3D canvas: crisp text at any resolution, styled in CSS.
 
+import type { Side } from "../match";
 import { pointLabels, type Tally } from "../scoring";
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, className: string, html = "") {
@@ -9,28 +10,30 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, className: string, ht
   return e;
 }
 
-function row(side: "player" | "cpu", name: string) {
+function row(className: string, name: string) {
   const root = el(
     "div",
-    `hud-row ${side}`,
+    `hud-row ${className}`,
     `<span class="hud-flag"></span><span class="hud-name"></span><span class="hud-games">0</span><span class="hud-pts">0</span>`,
   );
   root.querySelector(".hud-name")!.textContent = name;
   return { root, games: root.querySelector<HTMLElement>(".hud-games")!, pts: root.querySelector<HTMLElement>(".hud-pts")! };
 }
 
-export class Hud {
-  readonly root = el("div", "hud");
-  private readonly player = row("player", "Player 1");
-  private readonly cpu = row("cpu", "Computer");
-  private readonly rally = el("div", "hud-rally", `<small>Rally</small><b>0</b>`);
-  private readonly speed = el("div", "hud-speed", `<b>--</b><small>km/h</small>`);
-  private readonly marker = el("div", "hud-marker");
-  private readonly hint = el(
+const hint = (side: Side) =>
+  el(
     "div",
-    "hud-hint",
+    `hud-hint ${side}`,
     `<span class="hud-hint-tag">Serve</span><span class="hud-hint-text">Tap <b>Bounce ball</b> on your phone</span>`,
   );
+
+export class Hud {
+  readonly root = el("div", "hud");
+  private readonly rows: Record<Side, ReturnType<typeof row>>;
+  private readonly rally = el("div", "hud-rally", `<small>Rally</small><b>0</b>`);
+  private readonly speed = el("div", "hud-speed", `<b>--</b><small>km/h</small>`);
+  private readonly markers = { p1: el("div", "hud-marker"), p2: el("div", "hud-marker") };
+  private readonly hints = { p1: hint("p1"), p2: hint("p2") };
   private readonly pause = el(
     "div",
     "hud-pause",
@@ -38,19 +41,28 @@ export class Hud {
   );
   private bannerTimer = 0;
 
-  constructor(parent: HTMLElement) {
+  /** `split`: two players, Player 1's view in the top half and Player 2's in the bottom. */
+  constructor(parent: HTMLElement, names: Record<Side, string>, split: boolean) {
+    this.rows = { p1: row("p1", names.p1), p2: row(split ? "p2" : "p2 cpu", names.p2) };
     const board = el("div", "hud-board");
-    board.append(this.player.root, this.cpu.root);
+    board.append(this.rows.p1.root, this.rows.p2.root);
     const stats = el("div", "hud-stats");
     stats.append(this.rally, this.speed);
-    this.root.append(board, stats, this.marker, this.hint, this.pause);
+    this.root.classList.toggle("split", split);
+    if (split) this.root.append(el("div", "hud-divider"));
+    // The AirSports logo in the corner, like a broadcast's channel badge.
+    const logo = el("img", "hud-logo") as HTMLImageElement;
+    logo.src = "/brand/logo-wide.png";
+    logo.alt = "";
+    this.root.append(board, stats, logo, ...Object.values(this.markers), ...Object.values(this.hints), this.pause);
+    for (const side of ["p1", "p2"] as const) this.setMarker(side, null);
     parent.append(this.root);
   }
 
   setScore(t: Tally) {
     const pts = pointLabels(t);
-    for (const side of ["player", "cpu"] as const) {
-      const r = this[side];
+    for (const side of ["p1", "p2"] as const) {
+      const r = this.rows[side];
       set(r.games, String(t.games[side]));
       set(r.pts, pts[side]);
     }
@@ -69,15 +81,17 @@ export class Hud {
     if (kmh !== null) bump(this.speed);
   }
 
-  /** The "your serve" arrow over the player's head; null hides it. */
-  setMarker(at: { x: number; y: number } | null) {
-    this.marker.hidden = !at;
-    this.hint.hidden = !at;
-    if (at) this.marker.style.transform = `translate(${at.x}px, ${at.y}px)`;
+  /** The "your serve" arrow and hint in `side`'s view; null hides them. */
+  setMarker(side: Side, at: { x: number; y: number } | null) {
+    this.markers[side].hidden = !at;
+    this.hints[side].hidden = !at;
+    if (at) this.markers[side].style.transform = `translate(${at.x}px, ${at.y}px)`;
   }
 
-  setPaused(paused: boolean) {
+  /** `who`: whose phone dropped, e.g. "Player 2's phone disconnected". */
+  setPaused(paused: boolean, who = "Phone") {
     this.pause.hidden = !paused;
+    this.pause.querySelector("b")!.textContent = `${who} disconnected`;
   }
 
   banner(title: string, subtitle?: string) {

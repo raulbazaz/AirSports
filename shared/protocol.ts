@@ -1,8 +1,8 @@
 // Socket event contract shared by server, game screen, and phone controller.
 
 export type PlayerSlot = 1 | 2;
-/** 1 = single player vs computer. Set to 2 to enable two-player mode. */
-export const MAX_PLAYERS = 1;
+/** Phones per room: Player 1, and Player 2 for a split-screen match (else the computer plays). */
+export const MAX_PLAYERS = 2;
 
 /** Messages a phone sends that the server relays verbatim to the game screen. */
 export type ControllerInput =
@@ -29,7 +29,7 @@ export type ControllerInput =
 /** Messages the game screen sends to a specific phone. */
 export type HostMessage =
   | { type: "vibrate"; ms: number }
-  | { type: "state"; state: "lobby" | "calibrate" | "playing" | "paused" }
+  | { type: "state"; state: "lobby" | "calibrate" | "playing" | "paused" | "waiting" }
   /** Whether the phone's "Bounce ball" button should be enabled. */
   | { type: "serve"; ready: boolean }
   /** The phone answers with a "pong" input right away (clock sync and the debug round trip). */

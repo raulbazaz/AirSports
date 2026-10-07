@@ -90,17 +90,6 @@ export function outerGrassTexture() {
   return toTexture(c, { repeat: [1, 30] });
 }
 
-/** Name painted on the wall padding (white on transparent). */
-export function wallTextTexture(text: string) {
-  const { c, ctx } = canvas(512, 96);
-  ctx.fillStyle = "#ffffff";
-  ctx.font = "italic 800 72px 'Barlow Semi Condensed', sans-serif";
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.fillText(text, 256, 52);
-  return toTexture(c);
-}
-
 /** Net: a light grey square grid on transparent, tiled per metre. */
 export function netTexture() {
   const { c, ctx } = canvas(64);
