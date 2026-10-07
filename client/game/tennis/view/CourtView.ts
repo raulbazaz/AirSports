@@ -32,6 +32,21 @@ const HIT_STOP = { min: 0.035, max: 0.065 };
 const SQUASH = { hit: 0.42, bounce: 0.3, time: 0.08 };
 /** Render resolution bounds: start sharp, drop toward MIN if the device can't hold ~45 fps. */
 const PIXEL_RATIO = { max: 1.25, min: 0.6, step: 0.2 };
+/**
+ * First-person eye: a little above and behind the player's head so their own racquet sits in the
+ * lower right of the frame, looking down the court at a point `ahead` meters away on the ground.
+ */
+const EYE = { height: 1.8, back: 0.75, ahead: 9, fov: 64 };
+/**
+ * The head turns toward the ball once it's within `near` meters (up to `max` of the way), easing
+ * over `ease` seconds, so a ball bouncing at your feet stays on screen.
+ */
+const GAZE = { near: 5, max: 0.85, ease: 0.15 };
+/**
+ * Easing on the drawn racquet's angle (s). Phone tilts arrive over Wi-Fi in uneven bursts; this
+ * hides the gaps without a noticeable delay. The match still uses the raw angle for shots.
+ */
+const RACQUET_SMOOTH = 0.035;
 
 const UP = new THREE.Vector3(0, 1, 0);
 
@@ -79,8 +94,11 @@ export class CourtView {
   private raf = 0;
   private last = 0;
   private time = 0;
-  private camX = 0;
-  private camZ = 0;
+  /** The player's racquet axes as drawn, eased toward the phone's (see RACQUET_SMOOTH). */
+  private readonly shown = { shaft: new THREE.Vector3(0, 1, 0), strings: new THREE.Vector3(1, 0, 0) };
+  /** How far the head is turned toward the ball (0..GAZE.max), and the last place it was seen. */
+  private gaze = 0;
+  private readonly gazeAt = new THREE.Vector3();
   private pixelRatio: number;
   private slowFrames = 0;
   private sampledTime = 0;
@@ -135,6 +153,8 @@ export class CourtView {
       this.scene.add(simpleCrowd(seats));
     }
     this.scene.add(this.player.root, this.cpu.root, this.playerRacquet, this.cpuRacquet);
+    // First person: the player's body is still simulated (it places the racquet) but not drawn.
+    this.player.root.visible = false;
 
     const blob = new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2);
     const blobMat = new THREE.MeshBasicMaterial({ map: shadowTexture(), transparent: true, depthWrite: false });
@@ -146,6 +166,7 @@ export class CourtView {
       return m;
     };
     this.shadows = { player: shadow(1.1), cpu: shadow(1.1), ball: shadow(0.3) };
+    this.shadows.player.visible = false;
 
     this.ball = new THREE.Mesh(
       new THREE.SphereGeometry(BALL_RADIUS, 14, 10),
@@ -183,7 +204,7 @@ export class CourtView {
         if (!v) this.hud.setRally(0);
       },
       banner: (title, sub) => this.hud.banner(title, sub),
-      pop: (text) => this.hud.pop(text, this.toScreen(this.player.headWorld())),
+      pop: (text) => this.hud.pop(text, this.eyeLevel()),
       score: (s) => this.hud.setScore(s),
     });
 
@@ -226,8 +247,8 @@ export class CourtView {
     const buf = this.renderer.getDrawingBufferSize(new THREE.Vector2());
     this.post.setSize(buf.x, buf.y);
     this.camera.aspect = wpx / hpx;
-    // Keep the whole court width in view on narrow screens.
-    this.camera.fov = this.camera.aspect >= 1.5 ? 36 : 36 * Math.min(1.7, 1.5 / this.camera.aspect);
+    // Wider on narrow screens so the racquet and the sidelines stay in view.
+    this.camera.fov = this.camera.aspect >= 1.5 ? EYE.fov : Math.min(90, EYE.fov * (1.5 / this.camera.aspect));
     this.camera.updateProjectionMatrix();
   }
 
@@ -305,8 +326,8 @@ export class CourtView {
     this.player.update(dt, ms, m.player.vx, -m.player.vz);
     this.cpu.update(dt, ms, m.cpu.vx, -m.cpu.vz);
 
-    this.syncRacquet("player");
-    this.syncRacquet("cpu");
+    this.syncRacquet("player", realDt);
+    this.syncRacquet("cpu", realDt);
     this.syncBall(dt);
     this.crowd?.update(realDt, this.time, this.ballHolder.visible ? this.ballHolder.position : null);
     this.syncShadows();
@@ -314,7 +335,7 @@ export class CourtView {
     this.syncFlashes(realDt);
 
     this.hud.setRally(m.rally);
-    this.hud.setMarker(m.phase === "ready" ? this.toScreen(this.player.headWorld()) : null);
+    this.hud.setMarker(m.phase === "ready" ? this.eyeLevel() : null);
   }
 
   /** A swing from the phone arrived: animate it now, with contact just ahead. */
@@ -357,7 +378,7 @@ export class CourtView {
    * swinging. The computer's racquet follows the stroke path. Around contact the hand is drawn so
    * the strings meet the ball.
    */
-  private syncRacquet(who: Side) {
+  private syncRacquet(who: Side, dt: number) {
     const m = this.match;
     const { model, racquet, anim, hitAt } = this.sides[who];
     // The model's own frame in the world. Its right (racquet) hand is on its -x.
@@ -370,8 +391,9 @@ export class CourtView {
     let shaft: THREE.Vector3;
     let strings: THREE.Vector3;
     if (who === "player") {
-      shaft = wv(m.racquetAxes.shaft);
-      strings = wv(m.racquetAxes.strings);
+      const k = 1 - Math.exp(-dt / RACQUET_SMOOTH);
+      shaft = this.shown.shaft.lerp(wv(m.racquetAxes.shaft), k).normalize().clone();
+      strings = this.shown.strings.lerp(wv(m.racquetAxes.strings), k).normalize().clone();
     } else {
       shaft = local(pose.shaft).normalize();
       strings = new THREE.Vector3().crossVectors(shaft, fwd);
@@ -448,14 +470,15 @@ export class CourtView {
   }
 
   private syncCamera(dt: number) {
-    // High behind the near baseline looking down the whole court, drifting a little with the
-    // player so they stay framed.
+    // First person: locked to the player (any easing here makes the racquet swim against the
+    // view), looking down the court and turned a little toward the middle when out wide.
     const p = this.match.player;
-    const k = Math.min(1, dt * 2.5);
-    this.camX += (p.x * 0.35 - this.camX) * k;
-    this.camZ += (Math.min(p.z, COURT.netZ) * 0.35 - this.camZ) * k;
-    this.camera.position.copy(w(this.camX, 7.6, this.camZ - 9.6));
-    this.camera.lookAt(w(this.camX * 0.4, 0, COURT.netZ - 3.2 + this.camZ));
+    this.camera.position.copy(w(p.x, EYE.height, p.z - EYE.back));
+    const ball = this.ballHolder.visible ? this.ballHolder.position : null;
+    const near = ball ? THREE.MathUtils.clamp(1 - ball.distanceTo(this.camera.position) / GAZE.near, 0, 1) : 0;
+    if (ball) this.gazeAt.copy(ball);
+    this.gaze += (near * GAZE.max - this.gaze) * (1 - Math.exp(-dt / GAZE.ease));
+    this.camera.lookAt(w(p.x * 0.6, 0, p.z + EYE.ahead).lerp(this.gazeAt, this.gaze));
     // Impact kick: a short jolt toward the court with a fast shake.
     if (this.kick > 0.01) {
       const k = this.kick;
@@ -518,9 +541,8 @@ export class CourtView {
     });
   }
 
-  private toScreen(p: THREE.Vector3) {
-    const v = p.clone().project(this.camera);
-    const { clientWidth: wpx, clientHeight: hpx } = this.parent;
-    return { x: ((v.x + 1) / 2) * wpx, y: ((1 - v.y) / 2) * hpx };
+  /** Upper middle of the screen: where the serve hint and "nice shot" pops go in first person. */
+  private eyeLevel() {
+    return { x: this.parent.clientWidth / 2, y: this.parent.clientHeight * 0.3 };
   }
 }
