@@ -372,9 +372,9 @@ body {
   color: #0e161a;
 }
 
-/* The phone is on the direct link: no lag, and it keeps working without the internet. */
-.side.ready.direct .tag::after {
-  content: "Ready ⚡";
+/* The phone joined but can't reach this screen over the local network yet. */
+.side.linking .tag::after {
+  content: "Connecting";
 }
 
 .face,

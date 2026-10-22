@@ -24,11 +24,14 @@ const modes = { 1: $("#mode-1"), 2: $("#mode-2") };
 
 type Phase = "lobby" | "starting" | "playing";
 let phase: Phase = "lobby";
-/** Which phones are connected, by either path below. */
+/** Which phones are connected: their direct link is up, so they can play. */
 const connected: Record<PlayerSlot, boolean> = { 1: false, 2: false };
-/** Which phones the server says are in the room. */
+/** Which phones the server says are in the room (joined, but maybe not linked yet). */
 const viaServer: Record<PlayerSlot, boolean> = { 1: false, 2: false };
-/** Each phone's direct link. While it's open the phone counts as here, even with the server gone. */
+/**
+ * Each phone's direct link over the local network: the only way input and messages travel, so a
+ * phone must be on this screen's Wi-Fi or hotspot to play. The server only introduces the two.
+ */
 const links: Record<PlayerSlot, DirectLink | null> = { 1: null, 2: null };
 /** Each phone's newest link attempt (ids are unique across phones). */
 const newestLink: Record<PlayerSlot, number> = { 1: 0, 2: 0 };
@@ -89,15 +92,19 @@ function saveSession(code: string, hostToken: string) {
 
 function updateLobby() {
   startBtn.disabled = !connected[1] || phase !== "lobby";
-  statusEl.textContent = !socket.connected
+  const unlinked = ([1, 2] as const).find((slot) => viaServer[slot] && !connected[slot]);
+  statusEl.textContent = !socket.connected && !connected[1]
     ? "Connecting to server…"
-    : !connected[1]
-      ? "Scan the QR code with your phone to join"
-      : connected[2]
-        ? "Press Start for a 2-player split-screen match"
-        : "Press Start to play the computer, or scan with a 2nd phone for 2 players";
+    : unlinked
+      ? `Player ${unlinked}'s phone can't reach this screen yet. Put it on the same Wi-Fi or hotspot as this screen.`
+      : !connected[1]
+        ? "Scan the QR code with your phone to join"
+        : connected[2]
+          ? "Press Start for a 2-player split-screen match"
+          : "Press Start to play the computer, or scan with a 2nd phone for 2 players";
   // Say who the next phone to scan becomes (the server gives it the lowest free slot).
-  const next = !connected[1] ? 1 : !connected[2] ? 2 : null;
+  const taken = (slot: PlayerSlot) => connected[slot] || viaServer[slot];
+  const next = !taken(1) ? 1 : !taken(2) ? 2 : null;
   joinTitle.innerHTML = next ? `Scan to join as <b class="p${next}">Player ${next}</b>` : "Both players are in!";
   modes[1].classList.toggle("active", !connected[2]);
   modes[2].classList.toggle("active", connected[2]);
@@ -147,20 +154,29 @@ function syncConnected() {
   game?.setConnected({ p1: connected[1], p2: connected[2] || !inGame.includes(2) });
 }
 
-/** A phone is here if the server has it or its direct link is up. */
+/** A phone is here once its direct link is up; joined but not linked yet shows as connecting. */
 function refreshPlayer(slot: PlayerSlot, reconnected = false) {
-  const direct = !!links[slot]?.open;
-  const here = viaServer[slot] || direct;
+  const here = !!links[slot]?.open;
   if (!here) clocks[slot].samples.length = 0;
-  cards[slot].side.classList.toggle("direct", direct);
+  cards[slot].side.classList.toggle("linking", viaServer[slot] && !here);
+  const arrived = here && !connected[slot];
   showPlayer(slot, here, reconnected);
+  if (arrived) greet(slot);
 }
 
+/** A phone just reached the screen: buzz it and tell it what's going on. */
+function greet(slot: PlayerSlot) {
+  sendToPhone(slot, { type: "vibrate", ms: 60 });
+  sendToPhone(slot, { type: "state", state: phoneState(slot) });
+  if (phoneState(slot) === "playing") sendToPhone(slot, { type: "serve", ready: serveReady[slot] });
+}
+
+/** Dropped if the phone's link is down; `greet` catches it up when the link comes back. */
 function sendToPhone(slot: PlayerSlot, msg: HostMessage) {
-  if (!links[slot]?.send(msg)) socket.emit("host:send", { slot, msg });
+  links[slot]?.send(msg);
 }
 
-/** (Re)open the direct link to `slot`'s phone. Until it's up, messages go through the server. */
+/** (Re)open the direct link to `slot`'s phone. */
 async function linkPhone(slot: PlayerSlot) {
   links[slot]?.close();
   links[slot] = null;
@@ -171,10 +187,10 @@ async function linkPhone(slot: PlayerSlot) {
     if (newestLink[slot] !== id) return link.close(); // a newer attempt started while this one gathered
     links[slot] = link;
     link.onMessage = (input) => onInput(slot, input as ControllerInput);
-    link.onChange = () => refreshPlayer(slot, true);
+    link.onChange = () => refreshPlayer(slot);
     socket.emit("rtc:host", { slot, signal });
   } catch {
-    // no direct link; the server path still works
+    // the phone keeps rejoining until a link comes up
   }
 }
 
@@ -281,13 +297,11 @@ socket.on("connect", async () => {
 
 socket.on("disconnect", updateLobby);
 
-socket.on("player:joined", ({ slot, reconnected }) => {
+socket.on("player:joined", ({ slot, reconnected, linked }) => {
   viaServer[slot] = true;
   refreshPlayer(slot, reconnected);
-  void linkPhone(slot);
-  sendToPhone(slot, { type: "vibrate", ms: 60 });
-  sendToPhone(slot, { type: "state", state: phoneState(slot) });
-  if (phoneState(slot) === "playing") sendToPhone(slot, { type: "serve", ready: serveReady[slot] });
+  // A phone back after a blip with its link still working keeps it; otherwise offer a new one.
+  if (!linked || !links[slot]?.open) void linkPhone(slot);
 });
 
 socket.on("player:left", ({ slot }) => {

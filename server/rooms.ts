@@ -101,7 +101,7 @@ export class RoomManager {
       socket.data = { role: "controller", code: room.code, slot };
       socket.join(playersChannel(room.code));
       if (room.hostSocketId) {
-        this.io.to(room.hostSocketId).emit("player:joined", { slot, reconnected });
+        this.io.to(room.hostSocketId).emit("player:joined", { slot, reconnected, linked: req.linked === true });
       }
       ack({ ok: true, code: room.code, slot, playerToken: seat.token });
       socket.emit("host:status", { connected: room.hostSocketId !== null });

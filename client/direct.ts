@@ -1,12 +1,15 @@
 import type { RtcSignal } from "../shared/protocol";
 
-// A direct WebRTC link between a phone and the game screen. Once it's up, inputs and host messages
-// skip the server: on the same Wi-Fi or hotspot they never leave the room, and a match keeps going
-// if the internet drops. The server only carries the handshake, one message each way.
+// A direct WebRTC link between a phone and the game screen: the only way input travels during play.
+// The phone and the screen must be on the same Wi-Fi or hotspot, so input never leaves the room and a
+// match keeps going if the internet drops. The server only carries the handshake, one message each way.
 
-/** Lets the link also form between different networks, through each side's public address. */
-const ICE_SERVERS: RTCIceServer[] = [{ urls: "stun:stun.l.google.com:19302" }];
-/** Local candidates come in within milliseconds; don't hold the handshake for a slow STUN reply. */
+/**
+ * No STUN or TURN servers: each side offers only its local network addresses, so the link either
+ * forms over the local network or not at all (never a slower route through the internet).
+ */
+const ICE_SERVERS: RTCIceServer[] = [];
+/** Local candidates come in within milliseconds; this is only a safety net. */
 const GATHER_TIMEOUT_MS = 1500;
 
 export class DirectLink {
@@ -26,7 +29,7 @@ export class DirectLink {
     this.pc.ondatachannel = (e) => this.attach(e.channel);
   }
 
-  /** Usable right now. While it isn't, callers send through the server instead. */
+  /** Usable right now. */
   get open() {
     return this.sure?.readyState === "open" && this.pc.connectionState === "connected";
   }
@@ -54,7 +57,7 @@ export class DirectLink {
     await this.pc.setRemoteDescription(answer.sdp);
   }
 
-  /** Sends `msg` over the link. False if the link isn't up (send it through the server instead). */
+  /** Sends `msg` over the link. False if the link isn't up (the message is dropped). */
   send(msg: unknown, fast = false): boolean {
     if (!this.open) return false;
     const channel = fast && this.fast?.readyState === "open" ? this.fast : this.sure!;

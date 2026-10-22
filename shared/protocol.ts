@@ -65,7 +65,8 @@ export interface ClientToServerEvents {
    */
   "net:ping": (ack: Ack<{ tiltsIn: number }>) => void;
   // phone
-  "controller:join": (req: { code: string; playerToken?: string }, ack: Ack<JoinResult>) => void;
+  /** `linked`: the phone still has a working direct link to the screen (rejoining after a blip). */
+  "controller:join": (req: { code: string; playerToken?: string; linked?: boolean }, ack: Ack<JoinResult>) => void;
   "controller:input": (input: ControllerInput) => void;
   // direct link handshake: the screen names the phone, a phone always talks to its room's screen
   "rtc:host": (req: { slot: PlayerSlot; signal: RtcSignal }) => void;
@@ -74,7 +75,7 @@ export interface ClientToServerEvents {
 
 export interface ServerToClientEvents {
   // to game screen
-  "player:joined": (p: { slot: PlayerSlot; reconnected: boolean }) => void;
+  "player:joined": (p: { slot: PlayerSlot; reconnected: boolean; linked: boolean }) => void;
   "player:left": (p: { slot: PlayerSlot }) => void;
   "player:input": (p: { slot: PlayerSlot; input: ControllerInput }) => void;
   // to phone

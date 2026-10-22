@@ -39,16 +39,42 @@ codeInput.value = (params.get("room") ?? "").toUpperCase();
 
 const socket = connectSocket();
 let joinedCode: string | null = null;
-/** Direct link to the game screen (it starts the handshake). While it's up, the server isn't needed. */
+/**
+ * Direct link to the game screen over the local network (the screen starts the handshake). All input
+ * goes over it; the server only gets us into the room. Without it the phone can't play.
+ */
 let link: DirectLink | null = null;
 const linkEl = $("#link");
+/** How long the link gets to come up before we say the phone can't reach the screen and retry. */
+const LINK_WAIT_MS = 6000;
+/** When we last joined and so asked the game screen for a fresh link. */
+let linkAskedAt = 0;
+/** Since when we've been without a link (null while it's up). */
+let unlinkedSince: number | null = null;
 
-/** Send over the direct link if it's up, else through the server. */
 function send(input: ControllerInput) {
-  if (link?.send(input, input.type === "tilt")) return;
-  if (input.type === "tilt") socket.volatile.emit("controller:input", input);
-  else socket.emit("controller:input", input);
+  link?.send(input, input.type === "tilt");
 }
+
+/** Tell the player whether the phone reaches the screen. */
+function showLinkState() {
+  if (!joinedCode) return;
+  const open = !!link?.open;
+  linkEl.hidden = !open;
+  if (open) unlinkedSince = null;
+  else unlinkedSince ??= performance.now();
+  if (open) setStatus("");
+  else if (performance.now() - unlinkedSince! < LINK_WAIT_MS) setStatus("Connecting to the screen…");
+  else setStatus("Can't reach the screen. Connect this phone to the same Wi-Fi or hotspot as the screen.", true);
+}
+
+// Until the link is up, join again every few seconds: each join makes the screen offer a fresh link,
+// so the phone connects by itself once it's moved onto the screen's Wi-Fi or hotspot.
+setInterval(() => {
+  if (!joinedCode || link?.open) return;
+  if (socket.connected && performance.now() - linkAskedAt >= LINK_WAIT_MS) void join(joinedCode);
+  showLinkState();
+}, 1000);
 let stopTilt: (() => void) | null = null;
 
 let shownSlot = 0;
@@ -113,9 +139,11 @@ bounceBtn.addEventListener("click", () => {
 
 async function join(code: string) {
   joinBtn.disabled = true;
-  setStatus("Connecting…");
+  if (!joinedCode) setStatus("Connecting…");
   const playerToken = storage(() => localStorage.getItem(tokenKey(code))) ?? undefined;
-  const res = await socket.emitWithAck("controller:join", { code, playerToken });
+  const linked = !!link?.open;
+  if (!linked) linkAskedAt = performance.now();
+  const res = await socket.emitWithAck("controller:join", { code, playerToken, linked });
   joinBtn.disabled = false;
 
   if (!res.ok) {
@@ -132,7 +160,7 @@ async function join(code: string) {
   connectedEl.hidden = false;
   showSlot(res.slot);
   $("#room").textContent = res.code;
-  setStatus("");
+  showLinkState();
   history.replaceState(null, "", `/controller?room=${res.code}`);
   startStreaming();
 }
@@ -163,10 +191,9 @@ socket.on("disconnect", () => {
 
 socket.on("host:status", ({ connected }) => {
   if (link?.open) return;
-  setStatus(connected ? "" : "Game screen disconnected. Waiting…", !connected);
+  if (connected) showLinkState();
+  else setStatus("Game screen disconnected. Waiting…", true);
 });
-
-socket.on("host:message", onHostMessage);
 
 function onHostMessage(msg: HostMessage) {
   if (msg.type === "vibrate") navigator.vibrate?.(msg.ms);
@@ -182,20 +209,18 @@ socket.on("rtc:signal", async ({ signal }) => {
   newestOffer = signal.id;
   link?.close();
   link = null;
-  linkEl.hidden = true;
+  showLinkState();
   try {
     const { link: next, signal: answer } = await DirectLink.answer(signal);
     if (newestOffer !== signal.id) return next.close(); // replaced while we were answering
     link = next;
     next.onMessage = (msg) => onHostMessage(msg as HostMessage);
-    next.onChange = (open) => {
-      if (link !== next) return;
-      linkEl.hidden = !open;
-      if (open) setStatus("");
+    next.onChange = () => {
+      if (link === next) showLinkState();
     };
     socket.emit("rtc:phone", answer);
   } catch {
-    // no direct link; the server path still works
+    // the retry loop asks for a fresh link
   }
 });
 
