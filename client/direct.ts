@@ -9,6 +9,16 @@ import type { RtcSignal } from "../shared/protocol";
  * forms over the local network or not at all (never a slower route through the internet).
  */
 const ICE_SERVERS: RTCIceServer[] = [];
+/**
+ * Browsers hide their local address behind a random name like `a1b2.local` that the other device
+ * must look up, and many hotspots and Wi-Fi networks block that lookup. The link still forms if the
+ * game screen shares its real address (the phone's address is learned when it first reaches out), so
+ * the screen's Chrome is started with `npm run screen`, which turns the hiding off.
+ */
+export function sharesLocalAddress(sdp: string) {
+  return sdp.split("\n").some((line) => line.startsWith("a=candidate") && !line.split(" ")[4]?.endsWith(".local"));
+}
+
 /** Local candidates come in within milliseconds; this is only a safety net. */
 const GATHER_TIMEOUT_MS = 1500;
 

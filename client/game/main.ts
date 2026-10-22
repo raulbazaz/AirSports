@@ -1,7 +1,7 @@
 import QRCode from "qrcode";
 import type { ControllerInput, HostMessage, PlayerSlot } from "../../shared/protocol";
 import type { Who } from "../figure3d";
-import { DirectLink } from "../direct";
+import { DirectLink, sharesLocalAddress } from "../direct";
 import { connectSocket } from "../net";
 import type { Side, TennisGame } from "./tennis";
 
@@ -33,6 +33,8 @@ const viaServer: Record<PlayerSlot, boolean> = { 1: false, 2: false };
  * phone must be on this screen's Wi-Fi or hotspot to play. The server only introduces the two.
  */
 const links: Record<PlayerSlot, DirectLink | null> = { 1: null, 2: null };
+/** This browser hides its local address, so phones on most hotspots can't find it. */
+let addressHidden = false;
 /** Each phone's newest link attempt (ids are unique across phones). */
 const newestLink: Record<PlayerSlot, number> = { 1: 0, 2: 0 };
 let linkIds = 0;
@@ -95,6 +97,8 @@ function updateLobby() {
   const unlinked = ([1, 2] as const).find((slot) => viaServer[slot] && !connected[slot]);
   statusEl.textContent = !socket.connected && !connected[1]
     ? "Connecting to server…"
+    : unlinked && addressHidden
+      ? `Player ${unlinked}'s phone can't find this screen. Open this page with npm run screen (Chrome that shares its local address).`
     : unlinked
       ? `Player ${unlinked}'s phone can't reach this screen yet. Put it on the same Wi-Fi or hotspot as this screen.`
       : !connected[1]
@@ -185,6 +189,8 @@ async function linkPhone(slot: PlayerSlot) {
   try {
     const { link, signal } = await DirectLink.offer(id);
     if (newestLink[slot] !== id) return link.close(); // a newer attempt started while this one gathered
+    addressHidden = !sharesLocalAddress(signal.sdp.sdp);
+    updateLobby();
     links[slot] = link;
     link.onMessage = (input) => onInput(slot, input as ControllerInput);
     link.onChange = () => refreshPlayer(slot);

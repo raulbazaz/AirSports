@@ -8,6 +8,7 @@
     "build": "vite build",
     "start": "NODE_ENV=production tsx server/index.ts",
     "tunnel": "cloudflared tunnel --url http://localhost:3000",
+    "screen": "open -na 'Google Chrome' --args --user-data-dir=/tmp/airsports-screen --disable-features=WebRtcHideLocalIpsWithMdns ${URL:-https://airsports.raulbazaz.me}",
     "typecheck": "tsc --noEmit",
     "test:m1": "tsx scripts/test-rooms.ts"
   },
