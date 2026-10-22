@@ -1,6 +1,7 @@
 import QRCode from "qrcode";
 import type { ControllerInput, HostMessage, PlayerSlot } from "../../shared/protocol";
 import type { Who } from "../figure3d";
+import { DirectLink } from "../direct";
 import { connectSocket } from "../net";
 import type { Side, TennisGame } from "./tennis";
 
@@ -23,8 +24,15 @@ const modes = { 1: $("#mode-1"), 2: $("#mode-2") };
 
 type Phase = "lobby" | "starting" | "playing";
 let phase: Phase = "lobby";
-/** Which phones are connected. */
+/** Which phones are connected, by either path below. */
 const connected: Record<PlayerSlot, boolean> = { 1: false, 2: false };
+/** Which phones the server says are in the room. */
+const viaServer: Record<PlayerSlot, boolean> = { 1: false, 2: false };
+/** Each phone's direct link. While it's open the phone counts as here, even with the server gone. */
+const links: Record<PlayerSlot, DirectLink | null> = { 1: null, 2: null };
+/** Each phone's newest link attempt (ids are unique across phones). */
+const newestLink: Record<PlayerSlot, number> = { 1: 0, 2: 0 };
+let linkIds = 0;
 let game: TennisGame | null = null;
 /** Who's playing this match: slot 2 only in a two-player match. */
 let inGame: PlayerSlot[] = [];
@@ -139,8 +147,35 @@ function syncConnected() {
   game?.setConnected({ p1: connected[1], p2: connected[2] || !inGame.includes(2) });
 }
 
+/** A phone is here if the server has it or its direct link is up. */
+function refreshPlayer(slot: PlayerSlot, reconnected = false) {
+  const direct = !!links[slot]?.open;
+  const here = viaServer[slot] || direct;
+  if (!here) clocks[slot].samples.length = 0;
+  cards[slot].side.classList.toggle("direct", direct);
+  showPlayer(slot, here, reconnected);
+}
+
 function sendToPhone(slot: PlayerSlot, msg: HostMessage) {
-  socket.emit("host:send", { slot, msg });
+  if (!links[slot]?.send(msg)) socket.emit("host:send", { slot, msg });
+}
+
+/** (Re)open the direct link to `slot`'s phone. Until it's up, messages go through the server. */
+async function linkPhone(slot: PlayerSlot) {
+  links[slot]?.close();
+  links[slot] = null;
+  if (typeof RTCPeerConnection === "undefined") return;
+  const id = (newestLink[slot] = ++linkIds);
+  try {
+    const { link, signal } = await DirectLink.offer(id);
+    if (newestLink[slot] !== id) return link.close(); // a newer attempt started while this one gathered
+    links[slot] = link;
+    link.onMessage = (input) => onInput(slot, input as ControllerInput);
+    link.onChange = () => refreshPlayer(slot, true);
+    socket.emit("rtc:host", { slot, signal });
+  } catch {
+    // no direct link; the server path still works
+  }
 }
 
 /** What a phone should show: playing, in the lobby, or waiting out a match it isn't in. */
@@ -224,36 +259,54 @@ socket.on("connect", async () => {
   if (saved) {
     const res = await socket.emitWithAck("host:rejoin", saved);
     if (res.ok) {
-      for (const slot of [1, 2] as const) showPlayer(slot, res.players.includes(slot), true);
+      for (const slot of [1, 2] as const) {
+        viaServer[slot] = res.players.includes(slot);
+        refreshPlayer(slot, true);
+        // This page may have reloaded and lost its links; a phone that's here gets a fresh one.
+        if (viaServer[slot] && !links[slot]?.open) void linkPhone(slot);
+      }
       await showRoom(res.code);
       return;
     }
   }
   const { code, hostToken } = await socket.emitWithAck("host:create");
   saveSession(code, hostToken);
-  for (const slot of [1, 2] as const) showPlayer(slot, false);
+  // Phones still on a direct link keep playing; the new room's seats start empty.
+  for (const slot of [1, 2] as const) {
+    viaServer[slot] = false;
+    refreshPlayer(slot);
+  }
   await showRoom(code);
 });
 
 socket.on("disconnect", updateLobby);
 
 socket.on("player:joined", ({ slot, reconnected }) => {
-  showPlayer(slot, true, reconnected);
+  viaServer[slot] = true;
+  refreshPlayer(slot, reconnected);
+  void linkPhone(slot);
   sendToPhone(slot, { type: "vibrate", ms: 60 });
   sendToPhone(slot, { type: "state", state: phoneState(slot) });
   if (phoneState(slot) === "playing") sendToPhone(slot, { type: "serve", ready: serveReady[slot] });
 });
 
 socket.on("player:left", ({ slot }) => {
-  showPlayer(slot, false);
-  clocks[slot].samples.length = 0;
+  viaServer[slot] = false;
+  refreshPlayer(slot);
 });
 
-socket.on("player:input", ({ slot, input }) => {
+socket.on("rtc:signal", ({ slot, signal }) => {
+  links[slot]?.accept(signal).catch(() => {});
+});
+
+socket.on("player:input", ({ slot, input }) => onInput(slot, input));
+
+/** A phone's input, from the server or its direct link. */
+function onInput(slot: PlayerSlot, input: ControllerInput) {
   if (input.type === "pong") return onPong(slot, input);
   if (phase !== "playing" || !inGame.includes(slot)) return;
   game?.handleInput(SLOT_SIDE[slot], input, input.type === "swing" ? phoneAge(slot, input.t) : 0);
-});
+}
 
 // ---------- phone clock sync and network timing ----------
 

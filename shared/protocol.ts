@@ -35,6 +35,13 @@ export type HostMessage =
   /** The phone answers with a "pong" input right away (clock sync and the debug round trip). */
   | { type: "ping"; id: number };
 
+/**
+ * WebRTC handshake for the direct phone ↔ game screen link (offer from the screen, answer from the
+ * phone). Each carries all its ICE candidates, so one message each way is the whole exchange. The
+ * answer echoes the offer's id, so an answer to an older offer is ignored.
+ */
+export type RtcSignal = { id: number; sdp: { type: "offer" | "answer"; sdp: string } };
+
 export type JoinError = "ROOM_NOT_FOUND" | "ROOM_FULL";
 
 export type Ack<T> = (res: T) => void;
@@ -60,6 +67,9 @@ export interface ClientToServerEvents {
   // phone
   "controller:join": (req: { code: string; playerToken?: string }, ack: Ack<JoinResult>) => void;
   "controller:input": (input: ControllerInput) => void;
+  // direct link handshake: the screen names the phone, a phone always talks to its room's screen
+  "rtc:host": (req: { slot: PlayerSlot; signal: RtcSignal }) => void;
+  "rtc:phone": (signal: RtcSignal) => void;
 }
 
 export interface ServerToClientEvents {
@@ -71,4 +81,6 @@ export interface ServerToClientEvents {
   "host:message": (msg: HostMessage) => void;
   "host:status": (p: { connected: boolean }) => void;
   "room:closed": () => void;
+  // to either side: the other side's half of the direct link handshake
+  "rtc:signal": (p: { slot: PlayerSlot; signal: RtcSignal }) => void;
 }

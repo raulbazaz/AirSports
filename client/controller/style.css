@@ -205,6 +205,17 @@ button:disabled {
   height: 128px;
 }
 
+.link {
+  margin: 0 0 4px;
+  color: #1f9d55;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.link[hidden] {
+  display: none;
+}
+
 .hint {
   margin: 6px 0 0;
   color: var(--muted);

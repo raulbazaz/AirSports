@@ -118,6 +118,18 @@ export class RoomManager {
       (input.type === "tilt" ? host.volatile : host).emit("player:input", { slot, input });
     });
 
+    socket.on("rtc:host", ({ slot, signal }) => {
+      const seat = this.hostRoom(socket)?.seats.get(slot);
+      if (seat?.socketId) this.io.to(seat.socketId).emit("rtc:signal", { slot, signal });
+    });
+
+    socket.on("rtc:phone", (signal) => {
+      const { role, code, slot } = socket.data;
+      if (role !== "controller" || !code || !slot) return;
+      const room = this.rooms.get(code);
+      if (room?.hostSocketId) this.io.to(room.hostSocketId).emit("rtc:signal", { slot, signal });
+    });
+
     socket.on("net:ping", (ack) => {
       const room = this.hostRoom(socket);
       ack({ tiltsIn: room?.tiltsIn ?? 0 });

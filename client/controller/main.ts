@@ -1,6 +1,7 @@
-import type { HostMessage, JoinError } from "../../shared/protocol";
+import type { ControllerInput, HostMessage, JoinError } from "../../shared/protocol";
 import { lookForSlot } from "../characters";
 import { racquetAngle } from "../racquet";
+import { DirectLink } from "../direct";
 import { connectSocket } from "../net";
 import { keepAwake, requestSensorPermission, startSwingDetector, startTilt, tiltCounts } from "./sensors";
 
@@ -38,6 +39,16 @@ codeInput.value = (params.get("room") ?? "").toUpperCase();
 
 const socket = connectSocket();
 let joinedCode: string | null = null;
+/** Direct link to the game screen (it starts the handshake). While it's up, the server isn't needed. */
+let link: DirectLink | null = null;
+const linkEl = $("#link");
+
+/** Send over the direct link if it's up, else through the server. */
+function send(input: ControllerInput) {
+  if (link?.send(input, input.type === "tilt")) return;
+  if (input.type === "tilt") socket.volatile.emit("controller:input", input);
+  else socket.emit("controller:input", input);
+}
 let stopTilt: (() => void) | null = null;
 
 let shownSlot = 0;
@@ -63,12 +74,12 @@ function startStreaming() {
   const stopOrientation = startTilt(
     ({ alpha, beta, gamma, t }) => {
       angle = racquetAngle(beta, gamma, angle);
-      socket.volatile.emit("controller:input", { type: "tilt", alpha, beta, gamma, t });
+      send({ type: "tilt", alpha, beta, gamma, t });
     },
     () => setStatus("No motion data from this device. Open this page on a phone.", true),
   );
   const stopSwings = startSwingDetector(({ power, t, rate, orient }) => {
-    socket.emit("controller:input", {
+    send({
       type: "swing",
       power,
       side: angle >= 0 ? "forehand" : "backhand",
@@ -96,7 +107,7 @@ function showGameState(state: Extract<HostMessage, { type: "state" }>["state"]) 
 }
 
 bounceBtn.addEventListener("click", () => {
-  socket.emit("controller:input", { type: "bounce" });
+  send({ type: "bounce" });
   bounceBtn.disabled = true; // re-enabled by the next "serve" message
 });
 
@@ -108,6 +119,8 @@ async function join(code: string) {
   joinBtn.disabled = false;
 
   if (!res.ok) {
+    // The server lost the room while we were away, but the game screen is still on the direct link.
+    if (link?.open) return;
     joinedCode = null;
     setStatus(JOIN_ERRORS[res.error], true);
     return;
@@ -145,18 +158,45 @@ socket.on("connect", () => {
 });
 
 socket.on("disconnect", () => {
-  if (joinedCode) setStatus("Connection lost. Reconnecting…", true);
+  if (joinedCode && !link?.open) setStatus("Connection lost. Reconnecting…", true);
 });
 
 socket.on("host:status", ({ connected }) => {
+  if (link?.open) return;
   setStatus(connected ? "" : "Game screen disconnected. Waiting…", !connected);
 });
 
-socket.on("host:message", (msg) => {
+socket.on("host:message", onHostMessage);
+
+function onHostMessage(msg: HostMessage) {
   if (msg.type === "vibrate") navigator.vibrate?.(msg.ms);
   if (msg.type === "state") showGameState(msg.state);
   if (msg.type === "serve") bounceBtn.disabled = !msg.ready;
   if (msg.type === "ping") pong(msg.id);
+}
+
+// The game screen offers a direct link whenever we join; a new offer replaces the old link.
+let newestOffer = 0;
+socket.on("rtc:signal", async ({ signal }) => {
+  if (typeof RTCPeerConnection === "undefined") return;
+  newestOffer = signal.id;
+  link?.close();
+  link = null;
+  linkEl.hidden = true;
+  try {
+    const { link: next, signal: answer } = await DirectLink.answer(signal);
+    if (newestOffer !== signal.id) return next.close(); // replaced while we were answering
+    link = next;
+    next.onMessage = (msg) => onHostMessage(msg as HostMessage);
+    next.onChange = (open) => {
+      if (link !== next) return;
+      linkEl.hidden = !open;
+      if (open) setStatus("");
+    };
+    socket.emit("rtc:phone", answer);
+  } catch {
+    // no direct link; the server path still works
+  }
 });
 
 /**
@@ -167,12 +207,13 @@ let rateSince = performance.now();
 function pong(id: number) {
   const now = performance.now();
   const s = Math.max(0.001, (now - rateSince) / 1000);
-  socket.emit("controller:input", { type: "pong", id, now: Date.now(), sensorHz: Math.round(tiltCounts.sensor / s), sentHz: Math.round(tiltCounts.sent / s) });
+  send({ type: "pong", id, now: Date.now(), sensorHz: Math.round(tiltCounts.sensor / s), sentHz: Math.round(tiltCounts.sent / s) });
   tiltCounts.sensor = tiltCounts.sent = 0;
   rateSince = now;
 }
 
 socket.on("room:closed", () => {
+  if (link?.open) return; // the game screen is still here, just not on the server
   joinedCode = null;
   stopTilt?.();
   stopTilt = null;

@@ -240,6 +240,14 @@ body {
   word-break: break-all;
 }
 
+.direct-tip {
+  margin: 8px auto 0;
+  max-width: 260px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: #1f9d55;
+}
+
 .warning {
   margin: 10px auto 0;
   max-width: 260px;
@@ -362,6 +370,11 @@ body {
   content: "Ready";
   background: var(--board-green);
   color: #0e161a;
+}
+
+/* The phone is on the direct link: no lag, and it keeps working without the internet. */
+.side.ready.direct .tag::after {
+  content: "Ready ⚡";
 }
 
 .face,
