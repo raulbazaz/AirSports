@@ -3,6 +3,8 @@ import type { RtcSignal } from "../shared/protocol";
 // A direct WebRTC link between a phone and the game screen: the only way input travels during play.
 // The phone and the screen must be on the same Wi-Fi or hotspot, so input never leaves the room and a
 // match keeps going if the internet drops. The server only carries the handshake, one message each way.
+// The hotspot can't come from a racquet phone itself: Chrome on Android won't make a direct link over the
+// phone's own hotspot (it only tries mobile data), so the lobby and phone ask for a different phone's hotspot.
 
 /**
  * No STUN or TURN servers: each side offers only its local network addresses, so the link either
@@ -17,6 +19,17 @@ const ICE_SERVERS: RTCIceServer[] = [];
  */
 export function sharesLocalAddress(sdp: string) {
   return sdp.split("\n").some((line) => line.startsWith("a=candidate") && !line.split(" ")[4]?.endsWith(".local"));
+}
+
+/** The addresses in a description's candidates, e.g. "10.0.0.5, hidden name". */
+function addresses(sdp = "") {
+  const found = new Set<string>();
+  for (const line of sdp.split("\n")) {
+    if (!line.startsWith("a=candidate")) continue;
+    const address = line.split(" ")[4] ?? "";
+    found.add(address.endsWith(".local") ? "hidden name" : address);
+  }
+  return [...found].join(", ") || "none";
 }
 
 /** Local candidates come in within milliseconds; this is only a safety net. */
@@ -77,6 +90,32 @@ export class DirectLink {
     } catch {
       return false;
     }
+  }
+
+  /**
+   * How far the handshake got, for a person to read off the screen when the link won't come up: each
+   * side's addresses and how many connection checks went out, came back, and came in from the other.
+   */
+  async describe(me: string, other: string): Promise<string> {
+    let sent = 0;
+    let answered = 0;
+    let received = 0;
+    try {
+      (await this.pc.getStats()).forEach((s) => {
+        if (s.type !== "candidate-pair") return;
+        sent += s.requestsSent ?? 0;
+        answered += s.responsesReceived ?? 0;
+        received += s.requestsReceived ?? 0;
+      });
+    } catch {
+      // closed already: the counts stay 0
+    }
+    return [
+      `Link: ${this.pc.iceConnectionState}`,
+      `${me}: ${addresses(this.pc.localDescription?.sdp)}`,
+      `${other}: ${addresses(this.pc.remoteDescription?.sdp)}`,
+      `Checks: ${sent} sent · ${answered} answered · ${received} received`,
+    ].join("\n");
   }
 
   close() {

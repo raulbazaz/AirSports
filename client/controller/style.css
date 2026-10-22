@@ -244,6 +244,18 @@ button:disabled {
   text-shadow: none;
 }
 
+.diag {
+  margin: 8px 0 0;
+  color: #fff;
+  font-size: 0.8rem;
+  white-space: pre-line;
+  opacity: 0.85;
+}
+
+.diag[hidden] {
+  display: none;
+}
+
 .status:empty {
   display: none;
 }

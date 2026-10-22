@@ -51,6 +51,9 @@ const LINK_WAIT_MS = 6000;
 let linkAskedAt = 0;
 /** Since when we've been without a link (null while it's up). */
 let unlinkedSince: number | null = null;
+const diagEl = $("#diag");
+/** How far the last attempt got (shown under "Can't reach the screen"). */
+let lastDiag = "";
 
 function send(input: ControllerInput) {
   link?.send(input, input.type === "tilt");
@@ -63,9 +66,12 @@ function showLinkState() {
   linkEl.hidden = !open;
   if (open) unlinkedSince = null;
   else unlinkedSince ??= performance.now();
+  const failing = !open && performance.now() - unlinkedSince! >= LINK_WAIT_MS;
   if (open) setStatus("");
-  else if (performance.now() - unlinkedSince! < LINK_WAIT_MS) setStatus("Connecting to the screen…");
-  else setStatus("Can't reach the screen. Connect this phone to the same Wi-Fi or hotspot as the screen.", true);
+  else if (!failing) setStatus("Connecting to the screen…");
+  else setStatus("Can't reach the screen. Connect this phone to the same Wi-Fi or hotspot as the screen. If this phone is the hotspot, use a hotspot from a different phone instead.", true);
+  diagEl.hidden = !failing || !lastDiag;
+  diagEl.textContent = lastDiag;
 }
 
 // Until the link is up, join again every few seconds: each join makes the screen offer a fresh link,
@@ -207,8 +213,15 @@ let newestOffer = 0;
 socket.on("rtc:signal", async ({ signal }) => {
   if (typeof RTCPeerConnection === "undefined") return;
   newestOffer = signal.id;
-  link?.close();
+  const old = link;
   link = null;
+  if (old) {
+    void old.describe("This phone", "Screen").then((d) => {
+      lastDiag = d;
+      old.close();
+      showLinkState();
+    });
+  }
   showLinkState();
   try {
     const { link: next, signal: answer } = await DirectLink.answer(signal);

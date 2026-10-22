@@ -35,6 +35,9 @@ const viaServer: Record<PlayerSlot, boolean> = { 1: false, 2: false };
 const links: Record<PlayerSlot, DirectLink | null> = { 1: null, 2: null };
 /** This browser hides its local address, so phones on most hotspots can't find it. */
 let addressHidden = false;
+/** How far each phone's last link attempt got (shown in the lobby while it can't connect). */
+const lastDiag: Record<PlayerSlot, string> = { 1: "", 2: "" };
+const diagEl = $("#diag");
 /** Each phone's newest link attempt (ids are unique across phones). */
 const newestLink: Record<PlayerSlot, number> = { 1: 0, 2: 0 };
 let linkIds = 0;
@@ -100,12 +103,14 @@ function updateLobby() {
     : unlinked && addressHidden
       ? `Player ${unlinked}'s phone can't find this screen. Open this page with npm run screen (Chrome that shares its local address).`
     : unlinked
-      ? `Player ${unlinked}'s phone can't reach this screen yet. Put it on the same Wi-Fi or hotspot as this screen.`
+      ? `Player ${unlinked}'s phone can't reach this screen yet. Put it on the same Wi-Fi or hotspot as this screen. The hotspot must come from a different phone.`
       : !connected[1]
         ? "Scan the QR code with your phone to join"
         : connected[2]
           ? "Press Start for a 2-player split-screen match"
           : "Press Start to play the computer, or scan with a 2nd phone for 2 players";
+  diagEl.hidden = !unlinked || !lastDiag[unlinked];
+  diagEl.textContent = unlinked ? lastDiag[unlinked] : "";
   // Say who the next phone to scan becomes (the server gives it the lowest free slot).
   const taken = (slot: PlayerSlot) => connected[slot] || viaServer[slot];
   const next = !taken(1) ? 1 : !taken(2) ? 2 : null;
@@ -182,8 +187,15 @@ function sendToPhone(slot: PlayerSlot, msg: HostMessage) {
 
 /** (Re)open the direct link to `slot`'s phone. */
 async function linkPhone(slot: PlayerSlot) {
-  links[slot]?.close();
+  const old = links[slot];
   links[slot] = null;
+  if (old) {
+    void old.describe("Screen", `Player ${slot}'s phone`).then((d) => {
+      lastDiag[slot] = d;
+      old.close();
+      updateLobby();
+    });
+  }
   if (typeof RTCPeerConnection === "undefined") return;
   const id = (newestLink[slot] = ++linkIds);
   try {
